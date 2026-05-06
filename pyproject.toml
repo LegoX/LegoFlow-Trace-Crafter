@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swe-data-process"
+version = "0.1.0"
+description = "Convert SWE-bench agent trajectories into LLaMA-Factory SFT training data."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "tqdm>=4.60",
+    "transformers>=4.40",
+    "openpyxl>=3.1",
+    "datasets>=3.0",
+]
+
+[project.optional-dependencies]
+llm = ["openai>=1.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
