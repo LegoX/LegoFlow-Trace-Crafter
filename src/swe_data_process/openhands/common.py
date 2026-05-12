@@ -406,7 +406,7 @@ def extract_text(content: Any) -> str:
 
 
 def process_tool_call(tool_calls: Any) -> list[dict[str, Any]]:
-    """Normalize tool_calls: parse stringified arguments into dicts.
+    """Normalize tool_calls: keep function arguments as JSON strings.
 
     Returns a new list — does *not* mutate the input.
     """
@@ -415,14 +415,34 @@ def process_tool_call(tool_calls: Any) -> list[dict[str, Any]]:
 
     normalized: list[dict[str, Any]] = []
     for tool_call in tool_calls:
-        tc = dict(tool_call)  # shallow copy
-        try:
-            if 'function' in tc and 'arguments' in tc['function']:
-                args = tc['function']['arguments']
-                if isinstance(args, str):
-                    tc = {**tc, 'function': {**tc['function'], 'arguments': json.loads(args)}}
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            print(f"Error parsing tool_call: {e}")
+        if not isinstance(tool_call, dict):
+            continue
+
+        function = tool_call.get('function')
+        if not isinstance(function, dict):
+            function = {}
+
+        arguments = function.get('arguments')
+        if isinstance(arguments, str):
+            try:
+                parsed_arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                parsed_arguments = arguments
+        elif arguments is None:
+            parsed_arguments = {}
+        else:
+            parsed_arguments = arguments
+
+        tc = {
+            'type': 'function',
+            'function': {
+                'name': function.get('name', ''),
+                'arguments': json.dumps(parsed_arguments, ensure_ascii=False, separators=(",", ":")),
+            },
+        }
+        call_id = tool_call.get('id')
+        if isinstance(call_id, str) and call_id:
+            tc['id'] = call_id
         normalized.append(tc)
     return normalized
 
@@ -487,11 +507,20 @@ def process_response_of_json_data(json_data: dict[str, Any]) -> list[dict[str, A
     """Normalize messages + final response from a completion JSON into a flat list."""
     converted_messages: list[dict[str, Any]] = []
     for msg in json_data['messages']:
-        if msg['role'] in ['system', 'user', 'tool']:
+        if msg['role'] in ['system', 'user']:
             converted_messages.append({
                 'role': msg['role'],
                 'content': extract_text(msg.get('content'))
             })
+        elif msg['role'] == 'tool':
+            tool_message = {
+                'role': 'tool',
+                'content': extract_text(msg.get('content')),
+            }
+            tool_call_id = msg.get('tool_call_id')
+            if isinstance(tool_call_id, str) and tool_call_id:
+                tool_message['tool_call_id'] = tool_call_id
+            converted_messages.append(tool_message)
         elif msg['role'] == 'assistant':
             converted_messages.append({
                 'role': 'assistant',

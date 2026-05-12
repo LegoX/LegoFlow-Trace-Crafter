@@ -61,6 +61,11 @@ def parse_tool_arguments(arguments: Any, properties_order: list[str] | None = No
     return reorder_arguments_by_properties(parsed, properties_order)
 
 
+def stringify_tool_arguments(arguments: Any, properties_order: list[str] | None = None) -> str:
+    parsed = parse_tool_arguments(arguments, properties_order)
+    return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+
 def normalize_tool_content(content: Any) -> str:
     if isinstance(content, list):
         return join_text_parts(
@@ -103,18 +108,20 @@ def convert_assistant_blocks(
                 text_parts.append(text)
         elif block_type == "tool_use":
             tool_name = block.get("name", "")
-            tool_calls.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool_name,
-                        "arguments": parse_tool_arguments(
-                            block.get("input"),
-                            (tool_properties_order or {}).get(tool_name),
-                        ),
-                    },
-                }
-            )
+            tool_call = {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": stringify_tool_arguments(
+                        block.get("input"),
+                        (tool_properties_order or {}).get(tool_name),
+                    ),
+                },
+            }
+            tool_call_id = block.get("id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                tool_call["id"] = tool_call_id
+            tool_calls.append(tool_call)
 
     message: dict[str, Any] = {
         "role": "assistant",
@@ -149,7 +156,11 @@ def convert_user_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif block_type == "tool_result":
             flush_user_buffer()
             tool_content = normalize_tool_content(block.get("content", ""))
-            messages.append({"role": "tool", "content": tool_content})
+            tool_message: dict[str, Any] = {"role": "tool", "content": tool_content}
+            tool_call_id = block.get("tool_use_id") or block.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                tool_message["tool_call_id"] = tool_call_id
+            messages.append(tool_message)
         else:
             fallback_text = block.get("text") or block.get("content")
             if isinstance(fallback_text, str) and fallback_text.strip():
@@ -163,13 +174,13 @@ def _normalize_tool_calls(
     tool_calls: list[dict[str, Any]],
     tool_properties_order: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Normalize a list of tool_call dicts: parse arguments and reorder by schema."""
+    """Normalize a list of tool_call dicts: stringify arguments and reorder by schema."""
     return [
         {
             **tool_call,
             "function": {
                 **(tool_call.get("function") or {}),
-                "arguments": parse_tool_arguments(
+                "arguments": stringify_tool_arguments(
                     (tool_call.get("function") or {}).get("arguments"),
                     (tool_properties_order or {}).get(
                         ((tool_call.get("function") or {}).get("name") or "")
@@ -229,7 +240,11 @@ def convert_message(
 
     if role == "tool":
         tool_text = normalize_tool_content(content)
-        return [{"role": "tool", "content": tool_text}]
+        converted_message: dict[str, Any] = {"role": "tool", "content": tool_text}
+        tool_call_id = message.get("tool_call_id")
+        if isinstance(tool_call_id, str) and tool_call_id:
+            converted_message["tool_call_id"] = tool_call_id
+        return [converted_message]
 
     return []
 
@@ -265,10 +280,11 @@ def convert_final_response(
             function_name = function.get("name", "")
             tool_calls.append(
                 {
+                    "id": tool_call.get("id"),
                     "type": "function",
                     "function": {
                         "name": function_name,
-                        "arguments": parse_tool_arguments(
+                        "arguments": stringify_tool_arguments(
                             function.get("arguments"),
                             (tool_properties_order or {}).get(function_name),
                         ),

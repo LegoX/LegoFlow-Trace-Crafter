@@ -4,6 +4,7 @@ import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -13,6 +14,380 @@ from transformers import AutoTokenizer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 EXCLUDED_REPOS_FILE = REPO_ROOT / "artifacts" / "excluded_repos.txt"
+
+PANGUML_VERSION = "2.0.0"
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_PANGUML_TOP_LEVEL_KEYS = frozenset({
+    "version",
+    "meta_info",
+    "tools",
+    "messages",
+    "pseudo_turns",
+    "think_mode",
+    "_instance_id",
+    "_agent_type",
+    "_score",
+})
+_PANGUML_COMPAT_UNIQUE_INFO_KEYS = (
+    "_instance_id",
+    "_agent_type",
+    "_score",
+)
+
+
+def is_im_record(record: Any) -> bool:
+    if not isinstance(record, dict):
+        return False
+
+    messages = record.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return False
+
+    return all(
+        isinstance(message, dict) and isinstance(message.get("role"), str)
+        for message in messages
+    )
+
+
+def infer_think_mode_from_messages(messages: list[dict[str, Any]]) -> str:
+    has_reasoning = any(
+        message.get("role") == "assistant" and bool(message.get("reasoning_content"))
+        for message in messages
+    )
+    return "slow" if has_reasoning else "fast"
+
+
+def get_record_think_mode(record: dict[str, Any]) -> str:
+    think_mode = record.get("think_mode")
+    if think_mode in {"fast", "slow"}:
+        return think_mode
+
+    meta_info = record.get("meta_info")
+    if isinstance(meta_info, dict):
+        unique_info = meta_info.get("unique_info")
+        if isinstance(unique_info, dict):
+            unique_think_mode = unique_info.get("think_mode")
+            if unique_think_mode in {"fast", "slow"}:
+                return unique_think_mode
+
+    return infer_think_mode_from_messages(record.get("messages") or [])
+
+
+def count_assistant_rounds(messages: list[dict[str, Any]]) -> int:
+    return sum(1 for message in messages if message.get("role") == "assistant")
+
+
+def infer_language_code(messages: list[dict[str, Any]]) -> str:
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return "zh" if _CJK_RE.search(content) else "en"
+
+    return "en"
+
+
+def _normalize_content_to_string(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+
+    if content is None:
+        return ""
+
+    if isinstance(content, list):
+        text_parts = [
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        if text_parts:
+            return "\n\n".join(part for part in text_parts if part)
+
+    if isinstance(content, (dict, list)):
+        return json.dumps(content, ensure_ascii=False)
+
+    return str(content)
+
+
+def _extract_reasoning_from_content(content: str) -> tuple[str, str]:
+    stripped = content.strip()
+    if not stripped.startswith("<think>") or "</think>" not in stripped:
+        return "", content
+
+    reasoning_block = stripped[len("<think>"):]
+    reasoning, remainder = reasoning_block.split("</think>", 1)
+    return reasoning.strip(), remainder.strip()
+
+
+def _normalize_tool_arguments(arguments: Any) -> str:
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            parsed = arguments
+    elif arguments is None:
+        parsed = {}
+    else:
+        parsed = arguments
+
+    return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+
+def _normalize_tool_call(tool_call: Any) -> dict[str, Any] | None:
+    if not isinstance(tool_call, dict):
+        return None
+
+    function = tool_call.get("function")
+    if not isinstance(function, dict):
+        function = {}
+
+    normalized = {
+        "type": "function",
+        "function": {
+            "name": function.get("name", ""),
+            "arguments": _normalize_tool_arguments(function.get("arguments")),
+        },
+    }
+
+    call_id = tool_call.get("id")
+    if isinstance(call_id, str) and call_id:
+        normalized["id"] = call_id
+
+    return normalized
+
+
+def _restore_tool_arguments_for_lf(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    restored_messages: list[dict[str, Any]] = []
+
+    for message in messages:
+        if not isinstance(message, dict):
+            restored_messages.append(message)
+            continue
+
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            restored_messages.append(dict(message))
+            continue
+
+        restored_tool_calls: list[dict[str, Any]] = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                restored_tool_calls.append(tool_call)
+                continue
+
+            restored_tool_call = dict(tool_call)
+            function = tool_call.get("function")
+            if not isinstance(function, dict):
+                restored_tool_calls.append(restored_tool_call)
+                continue
+
+            restored_function = dict(function)
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    parsed_arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    parsed_arguments = arguments
+                restored_function["arguments"] = parsed_arguments
+
+            restored_tool_call["function"] = restored_function
+            restored_tool_calls.append(restored_tool_call)
+
+        restored_message = dict(message)
+        restored_message["tool_calls"] = restored_tool_calls
+        restored_messages.append(restored_message)
+
+    return restored_messages
+
+
+def _align_tool_call_ids(messages: list[dict[str, Any]]) -> None:
+    next_call_index = 1
+
+    for msg_index, message in enumerate(messages):
+        if message.get("role") != "assistant":
+            continue
+
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            continue
+
+        following_tools: list[dict[str, Any]] = []
+        cursor = msg_index + 1
+        while cursor < len(messages) and messages[cursor].get("role") == "tool":
+            following_tools.append(messages[cursor])
+            cursor += 1
+
+        following_tool_ids = [
+            tool_message.get("tool_call_id")
+            for tool_message in following_tools
+            if isinstance(tool_message.get("tool_call_id"), str) and tool_message["tool_call_id"]
+        ]
+
+        assigned_ids: list[str] = []
+        for tool_call_index, tool_call in enumerate(tool_calls):
+            call_id = tool_call.get("id")
+            if not isinstance(call_id, str) or not call_id:
+                if tool_call_index < len(following_tool_ids):
+                    call_id = following_tool_ids[tool_call_index]
+                else:
+                    call_id = f"call_{next_call_index:06d}"
+                    next_call_index += 1
+                tool_call["id"] = call_id
+            assigned_ids.append(call_id)
+
+        assign_cursor = 0
+        for tool_message in following_tools:
+            tool_call_id = tool_message.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                while assign_cursor < len(assigned_ids) and assigned_ids[assign_cursor] != tool_call_id:
+                    assign_cursor += 1
+                if assign_cursor < len(assigned_ids):
+                    assign_cursor += 1
+                continue
+
+            if assign_cursor < len(assigned_ids):
+                tool_message["tool_call_id"] = assigned_ids[assign_cursor]
+                assign_cursor += 1
+
+
+def _normalize_messages_for_panguml(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_messages: list[dict[str, Any]] = []
+
+    for raw_message in messages:
+        if not isinstance(raw_message, dict):
+            continue
+
+        role = raw_message.get("role")
+        if not isinstance(role, str) or not role:
+            continue
+
+        normalized_message: dict[str, Any] = {"role": role}
+
+        name = raw_message.get("name")
+        if isinstance(name, str) and name:
+            normalized_message["name"] = name
+
+        if role == "assistant":
+            content = _normalize_content_to_string(raw_message.get("content"))
+            extracted_reasoning, stripped_content = _extract_reasoning_from_content(content)
+            normalized_message["content"] = stripped_content if extracted_reasoning else content
+
+            reasoning = raw_message.get("reasoning_content")
+            if reasoning is None:
+                reasoning = extracted_reasoning
+            normalized_message["reasoning_content"] = _normalize_content_to_string(reasoning)
+
+            tool_calls = raw_message.get("tool_calls")
+            if isinstance(tool_calls, list):
+                normalized_tool_calls = [
+                    normalized_tool_call
+                    for tool_call in tool_calls
+                    if (normalized_tool_call := _normalize_tool_call(tool_call)) is not None
+                ]
+                if normalized_tool_calls:
+                    normalized_message["tool_calls"] = normalized_tool_calls
+
+            weight = raw_message.get("weight")
+            if isinstance(weight, (int, float)):
+                normalized_message["weight"] = weight
+        else:
+            normalized_message["content"] = _normalize_content_to_string(raw_message.get("content"))
+
+            if role == "tool":
+                tool_call_id = raw_message.get("tool_call_id")
+                if isinstance(tool_call_id, str) and tool_call_id:
+                    normalized_message["tool_call_id"] = tool_call_id
+
+        normalized_messages.append(normalized_message)
+
+    if normalized_messages and normalized_messages[0].get("role") != "system":
+        normalized_messages.insert(0, {"role": "system", "content": ""})
+
+    _align_tool_call_ids(normalized_messages)
+    return normalized_messages
+
+
+def _normalize_tools_for_panguml(tools: Any) -> list[dict[str, Any]]:
+    if not isinstance(tools, list):
+        return []
+
+    normalized_tools: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+
+        function = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+        if not isinstance(function, dict):
+            continue
+
+        normalized_tools.append({
+            "type": "function",
+            "function": {
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
+                "parameters": function.get("parameters") or function.get("input_schema") or {},
+            },
+        })
+
+    return normalized_tools
+
+
+def _build_meta_info(record: dict[str, Any], messages: list[dict[str, Any]]) -> dict[str, Any]:
+    existing_meta = record.get("meta_info")
+    meta_info = dict(existing_meta) if isinstance(existing_meta, dict) else {}
+
+    unique_info = meta_info.get("unique_info")
+    normalized_unique_info = dict(unique_info) if isinstance(unique_info, dict) else {}
+
+    for key in _PANGUML_COMPAT_UNIQUE_INFO_KEYS:
+        if key in record and key not in normalized_unique_info:
+            normalized_unique_info[key] = record[key]
+
+    for key, value in record.items():
+        if key in _PANGUML_TOP_LEVEL_KEYS:
+            continue
+        normalized_unique_info.setdefault(key, value)
+
+    today = date.today().isoformat()
+    return {
+        "teacher": meta_info.get("teacher") or "glm-5-thinking",
+        "query_source": meta_info.get("query_source") or "synthesized",
+        "response_generate_time": meta_info.get("response_generate_time") or today,
+        "response_update_time": meta_info.get("response_update_time") or today,
+        "owner": meta_info.get("owner") or "00000000",
+        "language": meta_info.get("language") or infer_language_code(messages),
+        "category": meta_info.get("category") or "code",
+        "rounds": meta_info.get("rounds") if meta_info.get("rounds") is not None else count_assistant_rounds(messages),
+        "unique_info": normalized_unique_info,
+    }
+
+
+def to_panguml_v2_record(record: dict[str, Any]) -> dict[str, Any]:
+    messages = _normalize_messages_for_panguml(record.get("messages") or [])
+    tools = _normalize_tools_for_panguml(record.get("tools") or [])
+
+    return {
+        "version": PANGUML_VERSION,
+        "meta_info": _build_meta_info(record, messages),
+        "tools": tools,
+        "messages": messages,
+    }
+
+
+def expand_panguml_compat_fields(record: dict[str, Any]) -> dict[str, Any]:
+    if not is_im_record(record):
+        return record
+
+    expanded = dict(record)
+    meta_info = expanded.get("meta_info")
+    unique_info = meta_info.get("unique_info") if isinstance(meta_info, dict) else None
+    if isinstance(unique_info, dict):
+        for key in _PANGUML_COMPAT_UNIQUE_INFO_KEYS:
+            if key in unique_info and key not in expanded:
+                expanded[key] = unique_info[key]
+    return expanded
 
 
 # ---------------------------------------------------------------------------
@@ -215,10 +590,10 @@ def convert_json_to_lf_format(
     scores_list: list[float] = []
 
     for i in tqdm(range(len(all_json_data))):
-        item = all_json_data[i]
+        item = expand_panguml_compat_fields(all_json_data[i])
         text = tokenizer.apply_chat_template(
-            item['messages'],
-            tools=item['tools'],
+            _restore_tool_arguments_for_lf(item['messages']),
+            tools=item.get('tools') or [],
             tokenize=False,
             add_generation_prompt=False,
         )
@@ -226,7 +601,7 @@ def convert_json_to_lf_format(
             texts_for_token_stats.append(text)
 
         messages: list[dict[str, str]] = []
-        think_mode_fast = item['think_mode'] == 'fast'
+        think_mode_fast = get_record_think_mode(item) == 'fast'
         for turn in text.split("<|im_end|>"):
             turn_str = turn.strip()
             if not turn_str:
@@ -300,7 +675,8 @@ def save_jsonl(output_path: Path, records: list[dict[str, Any]]) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
         for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            output_record = to_panguml_v2_record(record) if is_im_record(record) else record
+            f.write(json.dumps(output_record, ensure_ascii=False) + "\n")
 
 
 def load_jsonl(file_path: Path) -> list[dict[str, Any]]:
@@ -312,7 +688,8 @@ def load_jsonl(file_path: Path) -> list[dict[str, Any]]:
             if not line:
                 continue
             try:
-                records.append(json.loads(line))
+                record = json.loads(line)
+                records.append(expand_panguml_compat_fields(record) if is_im_record(record) else record)
             except json.JSONDecodeError as e:
                 print(f"  [WARN] 跳过 {file_path.name} 第 {lineno} 行: {e}")
     return records

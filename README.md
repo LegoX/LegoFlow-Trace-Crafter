@@ -1,10 +1,12 @@
 # swe_data_process
 
-Convert raw SWE-bench agent trajectory data into LF-format JSON files for SFT training.
+Standalone Python package for converting raw SWE-bench agent trajectory data into LF-format JSON files for SFT training.
 
 ## Overview
 
-The data processing workflow converts raw trajectories to intermediate IM format (+ auto-scored), then to LF format. Dataset registration, experiment tracking, and model training are handled by the `sft-train` block.
+This repository is self-contained: install it from this directory, run converters as `python -m swe_data_process...`, and write IM/LF outputs wherever your downstream training workflow expects them.
+
+The data processing workflow converts raw trajectories to intermediate IM format (+ auto-scored), then to LF format. Dataset registration, experiment tracking, and model training are outside the scope of this repository.
 
 The core data conversion follows this pipeline:
 
@@ -15,7 +17,7 @@ Raw trajectories (per-scaffold format)
   -> LLaMA-Factory "LF" format (ShareGPT-style messages, JSON array)
 ```
 
-The output LF JSON is used as input to the `sft-train` block.
+The output LF JSON can be consumed by downstream SFT training systems such as LLaMA-Factory.
 
 ## Supported Scaffolds
 
@@ -37,6 +39,7 @@ swe_data_process/
 │       ├── utils.py                     # Shared utilities (token stats, role validation, IM->LF conversion)
 │       ├── rule_score.py                # Rule-based trajectory quality scoring (v5, auto-invoked by converters)
 │       ├── llm_score.py                 # LLM-as-judge trajectory quality scoring (v2, optional)
+│       ├── llm_checklist_score.py       # OctoBench-aligned dynamic checklist LLM scoring (optional)
 │       ├── llm_client.py                # OpenAI-compatible LLM API client with retry and concurrency
 │       ├── claudecode_opencode/
 │       │   ├── convert_cc_jierun_to_im.py    # Claude Code (jierun) -> IM
@@ -58,9 +61,10 @@ swe_data_process/
 ├── artifacts/
 │   └── excluded_repos.txt                # Generated list of repos to exclude (from reference datasets)
 ├── docs/
-│   ├── data_format_requirement.md        # Data format specification
+│   ├── data_format_requirement_panguml_v2.md  # Data format specification
 │   ├── rule_score_details.md             # Rule-based scoring framework (v5) reference
-│   └── llm_score_details.md              # LLM-as-judge scoring framework (v1) reference
+│   ├── llm_score_details.md              # LLM-as-judge scoring framework reference
+│   └── llm_checklist_score_details.md    # Checklist-based LLM scoring reference
 ├── pyproject.toml                        # Package metadata (pip install -e .)
 ```
 
@@ -69,11 +73,14 @@ swe_data_process/
 ### Environment
 
 ```bash
+cd /path/to/swe_data_process
+conda create -n swelf python=3.12 -y
 conda activate swelf
-pip install -e repos/swe_data_process
+
+pip install -e '.[llm]'
 ```
 
-`pip install -e .` registers the repo as the `swe_data_process` package so every script can `import swe_data_process.*` regardless of working directory. Dependencies listed in `pyproject.toml` are installed automatically.
+`pip install -e .` registers this repository as the `swe_data_process` package so every script can `import swe_data_process.*` regardless of working directory. Dependencies listed in `pyproject.toml` are installed automatically. Use `pip install -e '.[llm]'` when running optional LLM scoring.
 
 ### Running Converters
 
@@ -98,17 +105,20 @@ CLI arguments vary by script. Full script matrix:
 | chaofan | terminus2 | `terminus2/convert_terminus2_chaofan_to_im.py` | `--source-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
 | chaofan | openhands-sdk | `openhands/convert_openhands_sdk_chaofan_to_im.py` | `--source-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
 
-Most converters default `--exclude-repos-file` to `artifacts/excluded_repos.txt` to filter out reference benchmark repos (pass `--exclude-repos-file ""` to disable). `--max-instances` defaults to no limit; pass a positive integer to cap.
+Most converters default `--exclude-repos-file` to this repo's `artifacts/excluded_repos.txt` to filter out reference benchmark repos (pass `--exclude-repos-file ""` to disable). `--max-instances` defaults to no limit; pass a positive integer to cap.
 
 ### Repo Filtering
 
 为避免训练数据与评测数据集（SWE-bench_Verified、SWE-bench_Pro、SWE-bench_Multilingual）在 repo 维度上有交叉，所有转换脚本默认启用 repo 过滤。
 
-生成排除列表（只需运行一次）：
+默认排除列表已随仓库提交在 `artifacts/excluded_repos.txt`。如需使用自定义列表，创建一个每行一个 `owner/repo` 的文本文件并通过 `--exclude-repos-file` 指定：
 
 ```bash
 conda activate swelf
-python scripts/generate_excluded_repos.py
+python -m swe_data_process.<subpackage>.convert_<scaffold>_<source>_to_im \
+    --job-dir <input> \
+    --lf-output <output> \
+    --exclude-repos-file /path/to/excluded_repos.txt
 ```
 
 禁用过滤：传 `--exclude-repos-file ""` 即可。
@@ -135,23 +145,34 @@ python -m swe_data_process.claudecode_opencode.analyze_trajectories -i /path/to/
 
 ```json
 {
+  "version": "2.0.0",
+  "meta_info": {
+    "teacher": "glm-5-thinking",
+    "query_source": "synthesized",
+    "response_generate_time": "2026-05-11",
+    "response_update_time": "2026-05-11",
+    "owner": "00000000",
+    "language": "en",
+    "category": "code",
+    "rounds": 2,
+    "unique_info": {
+      "_instance_id": "owner__repo-123",
+      "_agent_type": "main",
+      "_score": {"composite_score": 0.72}
+    }
+  },
+  "tools": [...],
   "messages": [
     {"role": "user", "content": "..."},
     {"role": "assistant", "content": "...", "reasoning_content": "...", "tool_calls": [...]},
-    {"role": "tool", "content": "..."}
-  ],
-  "tools": [...],
-  "pseudo_turns": null,
-  "think_mode": "slow",
-  "_instance_id": "owner__repo-123",
-  "_agent_type": "main",
-  "_score": {"composite_score": 0.72, "efficiency_score": 0.68, "style_score": 0.65, "...": "..."}
+    {"role": "tool", "tool_call_id": "call_001", "content": "..."}
+  ]
 }
 ```
 
-- `think_mode`: `"slow"` when `reasoning_content` is present (chain-of-thought), `"fast"` otherwise.
-- `_instance_id` and `_agent_type`: set by CC/OC converters. CC/OC instances may produce multiple records: one main agent (has Edit/Write tools) and zero or more subagents (read-only context-gatherer).
-- `_score`: auto-populated by `rule_score.py` during conversion (v5 framework, 5 dimensions / 10 sub-metrics). Optionally augmented by `llm_score.py` (LLM-as-judge, 5 categories / 15 checks). For subagent records, `_score` is `null`. See `docs/rule_score_details.md` and `docs/llm_score_details.md`. The LF format also carries `_score`, `_instance_id`, and `_agent_type` as top-level fields alongside `messages`.
+- IM 输出现在遵循 PangUML v2：顶层固定为 `version` / `meta_info` / `tools` / `messages`。
+- 旧内部字段 `think_mode`、`pseudo_turns` 不再持久化到 IM JSONL；`_instance_id`、`_agent_type`、`_score` 会写入 `meta_info.unique_info`。读取 JSONL 时，`load_jsonl()` 会自动把这三个兼容字段展开回旧接口，供打分和 LF 转换继续使用。
+- `assistant.reasoning_content` 会始终保留；无思维链时写成空字符串。工具调用参数 `function.arguments` 会统一序列化为 JSON 字符串。
 
 ### Validation Rules
 

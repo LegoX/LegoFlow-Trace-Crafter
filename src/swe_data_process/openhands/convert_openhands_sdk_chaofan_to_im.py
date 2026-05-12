@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
         "--im-output",
         type=Path,
         default=DEFAULT_IM_OUTPUT,
-        help="IM 数据 JSONL（每行一条含 messages/tools/pseudo_turns/think_mode）",
+        help="IM 数据 JSONL（PangUML v2: version/meta_info/tools/messages）",
     )
     parser.add_argument(
         "--lf-output",

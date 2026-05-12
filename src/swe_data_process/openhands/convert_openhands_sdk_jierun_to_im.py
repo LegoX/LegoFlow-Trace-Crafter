@@ -78,11 +78,20 @@ def parse_args() -> argparse.Namespace:
 
 def _normalize_message(msg: dict[str, Any]) -> dict[str, Any]:
     role = msg.get('role')
-    if role in ('system', 'user', 'tool'):
+    if role in ('system', 'user'):
         return {
             'role': role,
             'content': extract_text(msg.get('content')),
         }
+    if role == 'tool':
+        normalized = {
+            'role': 'tool',
+            'content': extract_text(msg.get('content')),
+        }
+        tool_call_id = msg.get('tool_call_id')
+        if isinstance(tool_call_id, str) and tool_call_id:
+            normalized['tool_call_id'] = tool_call_id
+        return normalized
     if role == 'assistant':
         out: dict[str, Any] = {
             'role': 'assistant',
