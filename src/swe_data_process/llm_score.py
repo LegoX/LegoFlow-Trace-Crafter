@@ -6,6 +6,7 @@
 
 用法:
   conda activate swelf
+  export OPENAI_BASE_URL="..."
   export OPENAI_API_KEY="sk-..."
   python -m swe_data_process.llm_score \
       --input artifacts/cc_jierun_im.jsonl \

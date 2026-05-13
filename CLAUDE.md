@@ -58,6 +58,10 @@ Raw trajectories (per-scaffold format)
 
 - **`artifacts/`** — Generated data files:
   - `excluded_repos.txt` — Generated list of 64 `owner/repo` entries (one per line) from the reference datasets. Used by `--exclude-repos-file`.
+  - `cc_jierun_im.jsonl` — Scoring example: base IM output (13 records from Claude Code jierun converter, before optional LLM scoring).
+  - `cc_jierun_im_rule_scored.jsonl` — Scoring example: same 13 records after `rule_score.py` (auto-invoked by converter; adds `composite_score`, sub-indicator scores).
+  - `cc_jierun_im_llm_scored.jsonl` — Scoring example: after `llm_score.py` (adds `llm_composite_score`, `llm_detailed_results`, `llm_checklist_version`).
+  - `cc_jierun_im_llm_checklist_scored.jsonl` — Scoring example: after `llm_checklist_score.py` (adds `llm_checklist_csr`, `llm_checklist_category_scores`, `llm_checklist_definition`).
 
 ### Naming conventions
 

@@ -1416,7 +1416,7 @@ def parse_args() -> argparse.Namespace:
         "--output", "-o",
         type=Path,
         default=None,
-        help="输出打分后的 JSONL 文件路径（默认: <input_stem>_scored.jsonl）",
+        help="输出打分后的 JSONL 文件路径（默认: <input_stem>_rule_scored.jsonl）",
     )
     parser.add_argument(
         "--max-instances",
@@ -1472,7 +1472,7 @@ def main() -> None:
     # 输出
     output_path = args.output
     if output_path is None:
-        output_path = input_path.with_name(f"{input_path.stem}_scored.jsonl")
+        output_path = input_path.with_name(f"{input_path.stem}_rule_scored.jsonl")
 
     save_jsonl(output_path, scored_records)
     print(f"打分结果已保存到: {output_path}")

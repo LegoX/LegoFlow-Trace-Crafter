@@ -20,10 +20,11 @@
 
 用法:
   conda activate swelf
-  export OPENAI_API_KEY=”sk-...”
+  export OPENAI_BASE_URL="..."
+  export OPENAI_API_KEY="sk-..."
   python -m swe_data_process.llm_checklist_score \
-      --input artifacts/cc_jierun_im_llm_scored.jsonl \
-      --output artifacts/cc_jierun_im_dynamic_checklist_scored.jsonl \
+      --input artifacts/cc_jierun_im.jsonl \
+      --output artifacts/cc_jierun_im_llm_checklist_scored.jsonl \
       --model gpt-4o-mini --concurrency 8
 """
 

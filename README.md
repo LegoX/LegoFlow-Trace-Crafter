@@ -59,7 +59,11 @@ swe_data_process/
 │           ├── convert_terminus2_chaofan_to_im.py
 │           └── convert_terminus2_jierun_to_im.py
 ├── artifacts/
-│   └── excluded_repos.txt                # Generated list of repos to exclude (from reference datasets)
+│   ├── excluded_repos.txt                # Generated list of repos to exclude (from reference datasets)
+│   ├── cc_jierun_im.jsonl                # Scoring example: base IM output (13 records, Claude Code jierun)
+│   ├── cc_jierun_im_rule_scored.jsonl    # Scoring example: after rule_score.py
+│   ├── cc_jierun_im_llm_scored.jsonl     # Scoring example: after llm_score.py
+│   └── cc_jierun_im_llm_checklist_scored.jsonl  # Scoring example: after llm_checklist_score.py
 ├── docs/
 │   ├── data_format_requirement_panguml_v2.md  # Data format specification
 │   ├── rule_score_details.md             # Rule-based scoring framework (v5) reference
