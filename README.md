@@ -69,6 +69,17 @@ swe_data_process/
 │   ├── rule_score_details.md             # Rule-based scoring framework (v5) reference
 │   ├── llm_score_details.md              # LLM-as-judge scoring framework reference
 │   └── llm_checklist_score_details.md    # Checklist-based LLM scoring reference
+├── tests/                            # Unit tests (pytest)
+│   ├── conftest.py                   # Shared fixtures
+│   ├── test_utils_validation.py      # check_roles, check_reasoning_content
+│   ├── test_utils_detection.py       # is_im_record, detect_agent_type, infer_think_mode
+│   ├── test_utils_normalization.py   # Normalization pipeline functions
+│   ├── test_utils_filtering.py       # Repo exclusion, score-based filtering
+│   ├── test_utils_io.py             # load_jsonl, save_jsonl
+│   ├── test_convert_jsonl_to_openai.py  # Claude Code/OpenCode converter
+│   ├── test_openhands_common.py      # OpenHands helpers
+│   ├── test_terminus2_common.py      # Terminus2 helpers
+│   └── test_rule_score.py           # Scoring functions, scaffold detection
 ├── pyproject.toml                        # Package metadata (pip install -e .)
 ```
 
@@ -85,6 +96,15 @@ pip install -e '.[llm]'
 ```
 
 `pip install -e .` registers this repository as the `swe_data_process` package so every script can `import swe_data_process.*` regardless of working directory. Dependencies listed in `pyproject.toml` are installed automatically. Use `pip install -e '.[llm]'` when running optional LLM scoring.
+
+### Running Tests
+
+```bash
+pip install -e '.[test]'
+pytest tests/ -v
+```
+
+268 unit tests covering utils, converters, and scoring. No network, GPU, or LLM calls required.
 
 ### Running Converters
 

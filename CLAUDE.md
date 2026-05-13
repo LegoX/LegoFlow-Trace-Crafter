@@ -31,7 +31,16 @@ CLI args vary by script — see `README.md` for the full matrix of scripts and t
 
 The `--exclude-repos-file` flag defaults to `artifacts/excluded_repos.txt` in this repo, enabling reference-repo filtering to exclude instances from evaluation benchmark repos. Pass `--exclude-repos-file ""` to disable.
 
-There are no tests, linting, or build steps.
+There are no linting or build steps.
+
+## Running Tests
+
+```bash
+pip install -e '.[test]'
+pytest tests/ -v
+```
+
+Tests cover: utils (validation, normalization, detection, filtering, I/O), converter modules (claudecode_opencode, openhands, terminus2), and rule-based scoring. All tests are pure unit tests — no network, GPU, or LLM calls required.
 
 ## Architecture
 
