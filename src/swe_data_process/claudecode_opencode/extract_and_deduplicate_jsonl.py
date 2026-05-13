@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -22,14 +23,14 @@ from swe_data_process.utils import save_jsonl
 
 
 def get_input_data(item: dict[str, Any]) -> Any:
-    """安全获取轨迹输入，兼容新旧 logger 字段及 chaofan CC 格式。"""
+    """安全获取轨迹输入，兼容新旧 logger 字段及多种 CC 格式。"""
     request_body = item.get("request_body", {})
     if "input" in request_body:
         return request_body.get("input")
     extra_input = request_body.get("extra_params", {}).get("input")
     if extra_input:
         return extra_input
-    # chaofan CC 格式: messages 直接在 request_body 下
+    # messages 直接在 request_body 下
     if "messages" in request_body:
         return request_body.get("messages")
     return ""
@@ -82,17 +83,23 @@ def _flatten_first_user_content(messages: list[Any]) -> None:
         break
 
 
+_CCH_PATTERN = re.compile(r"cch=[0-9a-f]+;")
+
+
 def normalize_input(input_value: Any) -> str:
     """对 input 做 mini-vela 风格的规范化后序列化成可用于 prefix 比较的字符串。
 
     - list 输入：先剥字段再移 thinking item，再拍平首条 user content，
       最后 sort_keys 序列化并去掉外层 `[`、`]` 以便前缀判断。
     - 非 list 输入：兜底直接序列化或原样字符串。
+
+    动态字段（如 Claude Code 的 cch= 哈希）会被统一替换，避免破坏前缀关系。
     """
     if isinstance(input_value, list):
         stripped = _strip_for_compare(input_value)
         _flatten_first_user_content(stripped)
-        return json.dumps(stripped, sort_keys=True, ensure_ascii=False)[1:-1]
+        result = json.dumps(stripped, sort_keys=True, ensure_ascii=False)[1:-1]
+        return _CCH_PATTERN.sub("cch=;", result)
 
     if isinstance(input_value, str):
         return input_value
@@ -175,7 +182,7 @@ def main() -> None:
     parser.add_argument(
         "-o", "--output",
         help="输出 jsonl 文件路径",
-        default="/home/ywxzml3j/ywxzml3juser57/jierun_test.jsonl",
+        default="/home/ywxzml3j/ywxzml3juser57/test.jsonl",
     )
     args = parser.parse_args()
 

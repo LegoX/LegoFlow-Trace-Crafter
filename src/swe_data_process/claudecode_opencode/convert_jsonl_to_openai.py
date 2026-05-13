@@ -410,18 +410,3 @@ def convert_record(record: dict[str, Any]) -> dict[str, Any]:
         "pseudo_turns": None,
         "think_mode": infer_think_mode(converted_messages),
     }
-
-
-def convert_file(input_path: Path) -> list[dict[str, Any]]:
-    converted_records: list[dict[str, Any]] = []
-    with input_path.open("r", encoding="utf-8") as file:
-        for line_number, line in enumerate(file, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                record = json.loads(stripped)
-            except json.JSONDecodeError as error:
-                raise ValueError(f"Line {line_number} is not valid JSON: {error}") from error
-            converted_records.append(convert_record(record))
-    return converted_records

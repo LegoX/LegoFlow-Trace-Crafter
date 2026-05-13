@@ -72,7 +72,7 @@ def analyze_tool_errors(records: list[dict[str, Any]]) -> None:
         request_body = record.get("request_body") or {}
         raw_messages = request_body.get("messages") or []
         if not raw_messages:
-            # 兼容 chaofan CC 格式
+            # 兼容另一种 CC 格式
             raw_messages = request_body.get("input") or []
             if not isinstance(raw_messages, list):
                 continue

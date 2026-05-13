@@ -21,13 +21,12 @@ The output LF JSON can be consumed by downstream SFT training systems such as LL
 
 ## Supported Scaffolds
 
-| Scaffold | Directory | Sources |
-|----------|-----------|---------|
-| Claude Code | `src/swe_data_process/claudecode_opencode/` | jierun, chaofan |
-| OpenCode | `src/swe_data_process/claudecode_opencode/` | jierun, chaofan |
-| OpenHands | `src/swe_data_process/openhands/` | chaofan |
-| OpenHands SDK | `src/swe_data_process/openhands/` | jierun, chaofan |
-| Terminus2 | `src/swe_data_process/terminus2/` | jierun, chaofan |
+| Scaffold | Directory | Script |
+|----------|-----------|--------|
+| Claude Code | `src/swe_data_process/claudecode_opencode/` | `convert_cc_to_im.py` |
+| OpenCode | `src/swe_data_process/claudecode_opencode/` | `convert_oc_to_im.py` |
+| OpenHands SDK | `src/swe_data_process/openhands/` | `convert_openhands_sdk_to_im.py` |
+| Terminus2 | `src/swe_data_process/terminus2/` | `convert_terminus2_to_im.py` |
 
 ## Project Structure
 
@@ -42,28 +41,25 @@ swe_data_process/
 │       ├── llm_checklist_score.py       # OctoBench-aligned dynamic checklist LLM scoring (optional)
 │       ├── llm_client.py                # OpenAI-compatible LLM API client with retry and concurrency
 │       ├── claudecode_opencode/
-│       │   ├── convert_cc_jierun_to_im.py    # Claude Code (jierun) -> IM
-│       │   ├── convert_cc_chaofan_to_im.py   # Claude Code (chaofan) -> IM
-│       │   ├── convert_oc_jierun_to_im.py    # OpenCode (jierun) -> IM
-│       │   ├── convert_oc_chaofan_to_im.py   # OpenCode (chaofan) -> IM
+│       │   ├── convert_cc_to_im.py           # Claude Code -> IM
+│       │   ├── convert_cc_session_to_im.py   # Claude Code session format -> IM
+│       │   ├── convert_dataclaw_to_im.py     # DataClaw format -> IM
+│       │   ├── convert_oc_to_im.py           # OpenCode -> IM
 │       │   ├── extract_and_deduplicate_jsonl.py  # Trajectory dedup (mini-vela prefix semantics)
 │       │   ├── convert_jsonl_to_openai.py    # Raw JSONL -> OpenAI message format (library module)
 │       │   └── analyze_trajectories.py       # Batch dedup + tool error analysis
 │       ├── openhands/
 │       │   ├── common.py                     # Content extraction & tool call normalization
-│       │   ├── convert_openhands_chaofan_to_im.py
-│       │   ├── convert_openhands_sdk_chaofan_to_im.py
-│       │   └── convert_openhands_sdk_jierun_to_im.py
+│       │   └── convert_openhands_sdk_to_im.py  # OpenHands SDK -> IM (unified)
 │       └── terminus2/
 │           ├── common.py                     # Analysis/Plan splitting, command normalization
-│           ├── convert_terminus2_chaofan_to_im.py
-│           └── convert_terminus2_jierun_to_im.py
+│           └── convert_terminus2_to_im.py    # Terminus2 -> IM (unified)
 ├── artifacts/
 │   ├── excluded_repos.txt                # Generated list of repos to exclude (from reference datasets)
-│   ├── cc_jierun_im.jsonl                # Scoring example: base IM output (13 records, Claude Code jierun)
-│   ├── cc_jierun_im_rule_scored.jsonl    # Scoring example: after rule_score.py
-│   ├── cc_jierun_im_llm_scored.jsonl     # Scoring example: after llm_score.py
-│   └── cc_jierun_im_llm_checklist_scored.jsonl  # Scoring example: after llm_checklist_score.py
+│   ├── cc_im.jsonl                       # Scoring example: base IM output (Claude Code)
+│   ├── cc_im_rule_scored.jsonl           # Scoring example: after rule_score.py
+│   ├── cc_im_llm_scored.jsonl            # Scoring example: after llm_score.py
+│   └── cc_im_llm_checklist_scored.jsonl  # Scoring example: after llm_checklist_score.py
 ├── docs/
 │   ├── data_format_requirement_panguml_v2.md  # Data format specification
 │   ├── rule_score_details.md             # Rule-based scoring framework (v5) reference
@@ -111,23 +107,18 @@ pytest tests/ -v
 Each converter is run as a Python module via the installed package. General pattern:
 
 ```bash
-python -m swe_data_process.<subpackage>.convert_{scaffold}_{source}_to_im \
+python -m swe_data_process.<subpackage>.convert_{scaffold}_to_im \
     --job-dir <input> --lf-output <output> --max-instances 1000
 ```
 
 CLI arguments vary by script. Full script matrix:
 
-| 来源 | 脚手架 | 脚本路径 | CLI 参数 |
-|------|--------|---------|----------|
-| jierun | openhands-sdk | `openhands/convert_openhands_sdk_jierun_to_im.py` | `--job-dir`, `--trajs-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| jierun | claude-code | `claudecode_opencode/convert_cc_jierun_to_im.py` | `--job-dir`, `--trajs-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| jierun | open-code | `claudecode_opencode/convert_oc_jierun_to_im.py` | `--job-dir`, `--trajs-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| jierun | terminus2 | `terminus2/convert_terminus2_jierun_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| chaofan | openhands | `openhands/convert_openhands_chaofan_to_im.py` | `--source-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| chaofan | claude-code | `claudecode_opencode/convert_cc_chaofan_to_im.py` | `--source-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| chaofan | open-code | `claudecode_opencode/convert_oc_chaofan_to_im.py` | `--source-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| chaofan | terminus2 | `terminus2/convert_terminus2_chaofan_to_im.py` | `--source-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| chaofan | openhands-sdk | `openhands/convert_openhands_sdk_chaofan_to_im.py` | `--source-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
+| 脚手架 | 脚本路径 | CLI 参数 |
+|--------|---------|----------|
+| claude-code | `claudecode_opencode/convert_cc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
+| open-code | `claudecode_opencode/convert_oc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
+| openhands-sdk | `openhands/convert_openhands_sdk_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
+| terminus2 | `terminus2/convert_terminus2_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
 
 Most converters default `--exclude-repos-file` to this repo's `artifacts/excluded_repos.txt` to filter out reference benchmark repos (pass `--exclude-repos-file ""` to disable). `--max-instances` defaults to no limit; pass a positive integer to cap.
 
@@ -139,7 +130,7 @@ Most converters default `--exclude-repos-file` to this repo's `artifacts/exclude
 
 ```bash
 conda activate swelf
-python -m swe_data_process.<subpackage>.convert_<scaffold>_<source>_to_im \
+python -m swe_data_process.<subpackage>.convert_<scaffold>_to_im \
     --job-dir <input> \
     --lf-output <output> \
     --exclude-repos-file /path/to/excluded_repos.txt

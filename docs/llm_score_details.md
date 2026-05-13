@@ -232,12 +232,12 @@ export OPENAI_BASE_URL="https://..."  # 可选，用于兼容 API
 
 # 对单个 IM JSONL 文件进行 LLM 打分
 python -m swe_data_process.llm_score \
-    --input artifacts/cc_jierun_im.jsonl \
-    --output artifacts/cc_jierun_im_llm_scored.jsonl \
+    --input artifacts/cc_im.jsonl \
+    --output artifacts/cc_im_llm_scored.jsonl \
     --model gpt-4o --concurrency 10
 
 # 预估费用（不调用 API）
-python -m swe_data_process.llm_score --input artifacts/cc_jierun_im.jsonl --dry-run
+python -m swe_data_process.llm_score --input artifacts/cc_im.jsonl --dry-run
 
 # 用于不支持 response_format 的 API
 python -m swe_data_process.llm_score --input ... --no-json-mode

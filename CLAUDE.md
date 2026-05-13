@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Purpose
 
-This is a standalone repository for converting raw SWE-bench agent trajectory data into LF-format JSON files ready for SFT training. The pipeline reads trajectories from different agent scaffolds (Claude Code, OpenCode, OpenHands, OpenHands SDK, Terminus2) and data sources (jierun, chaofan), converts them to an intermediate OpenAI-like format (IM), applies automatic quality scoring, then produces LLaMA-Factory sharegpt-format JSON. Dataset registration, experiment tracking, and model training are outside this repository's scope.
+This is a standalone repository for converting raw SWE-bench agent trajectory data into LF-format JSON files ready for SFT training. The pipeline reads trajectories from different agent scaffolds (Claude Code, OpenCode, OpenHands SDK, Terminus2), converts them to an intermediate OpenAI-like format (IM), applies automatic quality scoring, then produces LLaMA-Factory sharegpt-format JSON. Dataset registration, experiment tracking, and model training are outside this repository's scope.
 
 ## Running Scripts
 
@@ -61,22 +61,21 @@ Raw trajectories (per-scaffold format)
   - **`llm_score.py`** — LLM-as-judge trajectory quality scoring module (v2). Checklist-based evaluation using an LLM (5 categories / 15 checks, letters F-J). Complements rule-based scoring; results are merged into `_score` with `llm_` prefix.
   - **`llm_checklist_score.py`** — OctoBench-aligned dynamic checklist LLM scoring module. It generates per-instance binary checklist items from the user question, system prompt, and tool definitions, then scores the full trajectory and writes ISR/CSR-style results into `_score`.
   - **`llm_client.py`** — OpenAI-compatible LLM API client with retry, concurrency control, and token/cost tracking. Used by `llm_score.py` and `llm_checklist_score.py`.
-  - **`claudecode_opencode/`** — Converters for Claude Code (`convert_cc_*.py`) and OpenCode (`convert_oc_*.py`) trajectories. Also contains `extract_and_deduplicate_jsonl.py` (deduplicates raw JSONL trajectories, aligned with mini-vela prefix-based dedup semantics) and `convert_jsonl_to_openai.py` (library module that converts raw records to OpenAI message format) — used as libraries by the `cc`/`oc` converter scripts — and `analyze_trajectories.py` (batch dedup + tool-call error analysis).
-  - **`openhands/`** — Converters for OpenHands trajectories. `common.py` has helpers for extracting text from content blocks, normalizing tool calls, `OPENHANDS_SDK_TOOLS` constant (complete OpenAI function-calling format for SDK tools), and `convert_chaofan_dataset()` (unified converter for chaofan-style completions directories, shared by both SDK and non-SDK chaofan scripts).
-  - **`terminus2/`** — Converters for Terminus2 trajectories. `common.py` handles the Terminus2-specific format: splitting `Analysis:/Plan:` messages, normalizing commands from tool calls, and converting steps to user/assistant message pairs.
+  - **`claudecode_opencode/`** — Converters for Claude Code (`convert_cc_to_im.py`) and OpenCode (`convert_oc_to_im.py`) trajectories. Also contains `convert_cc_session_to_im.py` (session format), `convert_dataclaw_to_im.py` (DataClaw format), `extract_and_deduplicate_jsonl.py` (deduplicates raw JSONL trajectories, aligned with mini-vela prefix-based dedup semantics) and `convert_jsonl_to_openai.py` (library module that converts raw records to OpenAI message format) — used as libraries by the `cc`/`oc` converter scripts — and `analyze_trajectories.py` (batch dedup + tool-call error analysis).
+  - **`openhands/`** — Converter for OpenHands SDK trajectories (`convert_openhands_sdk_to_im.py`). `common.py` has helpers for extracting text from content blocks, normalizing tool calls, and `OPENHANDS_SDK_TOOLS` constant (complete OpenAI function-calling format for SDK tools).
+  - **`terminus2/`** — Converter for Terminus2 trajectories (`convert_terminus2_to_im.py`). `common.py` handles the Terminus2-specific format: splitting `Analysis:/Plan:` messages, normalizing commands from tool calls, and converting steps to user/assistant message pairs.
 
 - **`artifacts/`** — Generated data files:
   - `excluded_repos.txt` — Generated list of 64 `owner/repo` entries (one per line) from the reference datasets. Used by `--exclude-repos-file`.
-  - `cc_jierun_im.jsonl` — Scoring example: base IM output (13 records from Claude Code jierun converter, before optional LLM scoring).
-  - `cc_jierun_im_rule_scored.jsonl` — Scoring example: same 13 records after `rule_score.py` (auto-invoked by converter; adds `composite_score`, sub-indicator scores).
-  - `cc_jierun_im_llm_scored.jsonl` — Scoring example: after `llm_score.py` (adds `llm_composite_score`, `llm_detailed_results`, `llm_checklist_version`).
-  - `cc_jierun_im_llm_checklist_scored.jsonl` — Scoring example: after `llm_checklist_score.py` (adds `llm_checklist_csr`, `llm_checklist_category_scores`, `llm_checklist_definition`).
+  - `cc_im.jsonl` — Scoring example: base IM output (Claude Code converter, before optional LLM scoring).
+  - `cc_im_rule_scored.jsonl` — Scoring example: after `rule_score.py` (auto-invoked by converter; adds `composite_score`, sub-indicator scores).
+  - `cc_im_llm_scored.jsonl` — Scoring example: after `llm_score.py` (adds `llm_composite_score`, `llm_detailed_results`, `llm_checklist_version`).
+  - `cc_im_llm_checklist_scored.jsonl` — Scoring example: after `llm_checklist_score.py` (adds `llm_checklist_csr`, `llm_checklist_category_scores`, `llm_checklist_definition`).
 
 ### Naming conventions
 
-Each converter script follows the pattern: `convert_{scaffold}_{source}_to_im.py`
-- scaffold: `cc` (Claude Code), `oc` (OpenCode), `openhands`/`openhands_sdk`, `terminus2`
-- source: `jierun` or `chaofan` (different data providers with different raw formats)
+Each converter script follows the pattern: `convert_{scaffold}_to_im.py`
+- scaffold: `cc` (Claude Code), `oc` (OpenCode), `openhands_sdk`, `terminus2`
 
 ### Key data format
 

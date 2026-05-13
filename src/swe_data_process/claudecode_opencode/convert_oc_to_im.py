@@ -1,5 +1,4 @@
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +12,9 @@ from swe_data_process.utils import (
     ProcessSummary,
     check_roles,
     check_reasoning_content,
+    extract_instance_id,
     filter_instance_ids_by_repo,
-    get_resolved_instances,
+    get_resolved_instances_from_job_dir,
     load_exclusion_patterns,
     replace_system_model_name,
     save_jsonl,
@@ -25,24 +25,22 @@ from swe_data_process.utils import (
 
 
 DEFAULT_JOB_DIR = Path(
-    "/home/ywxzml3j/ywxzml3juser30/code/harbor/jobs/"
-    "swerebench-filtered-oraclesolved-opencode-1.2.10-GLM-5-FP8-20260321233943"
+    "/home/ywxzml3j/ywxzml3juser57/code/harbor-dev/jobs/"
+    "swebench-verified-100-custom-opencode-1.2.10-Qwen3-Coder-30B-A3B-Instruct-20260507094527"
 )
-DEFAULT_TRAJ_DIR = Path(f"{DEFAULT_JOB_DIR}_trajs_via_logger")
 DEFAULT_IM_OUTPUT = Path(
     "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "jierun_glm5_swerebench_oraclesolved_oc_1k.jsonl"
+    "glm5_swerebench_oraclesolved_oc_1k.jsonl"
 )
 DEFAULT_LF_OUTPUT = Path(
     "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "jierun_glm5_swerebench_oraclesolved_oc_1k.json"
+    "glm5_swerebench_oraclesolved_oc_1k.json"
 )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Convert OpenCode jierun trajectories to IM data")
+    parser = argparse.ArgumentParser(description="Convert OpenCode trajectories to IM data")
     parser.add_argument("--job-dir", type=Path, default=DEFAULT_JOB_DIR, help="评测 job 目录")
-    parser.add_argument("--trajs-dir", type=Path, default=DEFAULT_TRAJ_DIR, help="logger 轨迹目录")
     parser.add_argument("--im-output", type=Path, default=DEFAULT_IM_OUTPUT, help="输出 IM JSONL 文件")
     parser.add_argument("--lf-output", type=Path, default=DEFAULT_LF_OUTPUT, help="输出 LF JSON 文件")
     parser.add_argument("--max-instances", type=int, default=None, help="最多处理多少个实例，默认不限制")
@@ -55,22 +53,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def validate_paths(job_dir: Path, trajs_dir: Path) -> None:
-    result_json = job_dir / "result.json"
-    if not result_json.exists():
-        raise FileNotFoundError(f"result.json 不存在: {result_json}")
-    if not trajs_dir.exists():
-        raise FileNotFoundError(f"轨迹目录不存在: {trajs_dir}")
+def _is_subagent_record(record: dict) -> bool:
+    """检测非主对话记录（如 OpenCode 的 title generator 子调用）。"""
+    messages = record.get("request_body", {}).get("messages", [])
+    if not messages:
+        return False
+    first = messages[0]
+    if first.get("role") == "system":
+        content = first.get("content", "")
+        if "title generator" in content.lower():
+            return True
+    return False
 
 
-def process_one_instance(instance_id: str, traj_path: Path, trajs_via_logger_path: Path) -> tuple[list[dict], int, int]:
-    config_file = traj_path / instance_id / "config.json"
-    with config_file.open("r", encoding="utf-8") as f:
-        config = json.load(f)
-
-    extracted_instance_id = Path(config["task"]["path"]).name
-    trajs_via_logger_file = trajs_via_logger_path / f"{extracted_instance_id}.jsonl"
-    records = deduplicate_trajectories(trajs_via_logger_file)
+def process_one_instance(folder_name: str, job_dir: Path) -> tuple[list[dict], int, int]:
+    traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
+    records = deduplicate_trajectories(traj_file)
+    records = [r for r in records if not _is_subagent_record(r)]
 
     converted_records: list[dict] = []
     role_filtered = 0
@@ -98,23 +97,23 @@ def process_one_instance(instance_id: str, traj_path: Path, trajs_via_logger_pat
 
 
 def collect_im_data(
-    resolved_instances: list[str],
+    resolved_folders: list[str],
     job_dir: Path,
-    trajs_dir: Path,
-    max_instances: int,
+    max_instances: int | None,
     quiet: bool,
 ) -> tuple[list[dict[str, Any]], ProcessSummary]:
     im_data: list[dict[str, Any]] = []
     summary = ProcessSummary()
 
-    kept_instance_count = 0
-    for instance_id in tqdm(resolved_instances, desc="Processing instances"):
-        if kept_instance_count >= max_instances:
+    kept_folder_count = 0
+    for folder_name in tqdm(resolved_folders, desc="Processing instances"):
+        if max_instances is not None and kept_folder_count >= max_instances:
             break
 
+        instance_id = extract_instance_id(folder_name)
         try:
             converted_records, role_filtered, reasoning_filtered = process_one_instance(
-                instance_id, job_dir, trajs_dir
+                folder_name, job_dir
             )
             summary.role_filtered += role_filtered
             summary.reasoning_filtered += reasoning_filtered
@@ -122,7 +121,7 @@ def collect_im_data(
             if converted_records and should_keep_instance(role_filtered, reasoning_filtered):
                 tag_instance_records(converted_records, instance_id)
                 im_data.extend(converted_records)
-                kept_instance_count += 1
+                kept_folder_count += 1
         except Exception as e:
             summary.failed_instances += 1
             if not quiet:
@@ -133,22 +132,24 @@ def collect_im_data(
 
 def main() -> None:
     args = parse_args()
-    validate_paths(args.job_dir, args.trajs_dir)
+    job_dir = args.job_dir
+    if not job_dir.exists():
+        raise FileNotFoundError(f"Job 目录不存在: {job_dir}")
 
-    result_json = args.job_dir / "result.json"
-    resolved_instances = get_resolved_instances(result_json)
-    print(f"Total resolved instances: {len(resolved_instances)}")
+    resolved_folders = get_resolved_instances_from_job_dir(job_dir)
+    print(f"Total resolved instances: {len(resolved_folders)}")
 
     exclusion_patterns = load_exclusion_patterns(args.exclude_repos_file)
     if exclusion_patterns:
-        resolved_instances = filter_instance_ids_by_repo(
-            resolved_instances, exclusion_patterns, label="oc-jierun",
-        )
+        instance_ids = [extract_instance_id(f) for f in resolved_folders]
+        kept_ids = set(filter_instance_ids_by_repo(
+            instance_ids, exclusion_patterns, label="oc",
+        ))
+        resolved_folders = [f for f in resolved_folders if extract_instance_id(f) in kept_ids]
 
     im_data, summary = collect_im_data(
-        resolved_instances=resolved_instances,
-        job_dir=args.job_dir,
-        trajs_dir=args.trajs_dir,
+        resolved_folders=resolved_folders,
+        job_dir=job_dir,
         max_instances=args.max_instances,
         quiet=args.quiet,
     )

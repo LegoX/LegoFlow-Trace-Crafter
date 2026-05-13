@@ -1,35 +1,45 @@
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from swe_data_process.terminus2.common import convert_one_record, iter_records, to_lf_record
 from swe_data_process.rule_score import score_dataset
-from swe_data_process.utils import EXCLUDED_REPOS_FILE, get_resolved_instances, instance_id_matches_excluded_repos, load_exclusion_patterns, load_json, print_lf_token_stats, save_jsonl
+from swe_data_process.utils import (
+    EXCLUDED_REPOS_FILE,
+    extract_instance_id,
+    filter_instance_ids_by_repo,
+    get_resolved_instances_from_job_dir,
+    load_exclusion_patterns,
+    load_json,
+    print_lf_token_stats,
+    save_jsonl,
+)
 
 
-DEFAULT_SOURCE_DIR = Path(
-    "/home/ywxzml3j/ywxzml3juser23/harbor/jobs-GLM-5-ready/glm5-oraclesolved/jobs-glm5-oraclesolved-t2-1k-success"
+DEFAULT_JOB_DIR = Path(
+    "/home/ywxzml3j/ywxzml3juser57/code/harbor-dev/jobs/"
+    "swebench_multilingual-100-terminus-2-Qwen3-8B-20260511120629"
 )
 DEFAULT_IM_OUTPUT = Path(
     "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "chaofan_glm5_swerebench_oraclesolved_t2_1k.jsonl"
+    "glm5_swerebench_oraclesolved_t2_1k.jsonl"
 )
 DEFAULT_LF_OUTPUT = Path(
     "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "chaofan_glm5_swerebench_oraclesolved_t2_1k.json"
+    "glm5_swerebench_oraclesolved_t2_1k.json"
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="将 terminus2 chaofan Harbor 目录下的 agent/trajectory.json 转为 IM / LF 数据"
+        description="将 terminus2 Harbor job 目录下的 agent/trajectory.json 转为 IM / LF 数据"
     )
     parser.add_argument(
-        "--source-dir",
+        "--job-dir",
         type=Path,
-        default=DEFAULT_SOURCE_DIR,
-        help="含多个 trial 子目录的根目录（每实例 agent/trajectory.json）",
+        default=DEFAULT_JOB_DIR,
+        help="Harbor 评测 job 根目录（含 result.json）",
     )
     parser.add_argument(
         "--im-output",
@@ -57,55 +67,41 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def iter_trajectory_files(
-    root_dir: Path,
-    exclusion_patterns: list | None = None,
-) -> Iterable[Path]:
-    if not root_dir.exists():
-        raise FileNotFoundError(f"Input root not found: {root_dir}")
-
-    skipped = 0
-    for child in sorted(root_dir.iterdir()):
-        if not child.is_dir():
-            continue
-        if exclusion_patterns and instance_id_matches_excluded_repos(child.name, exclusion_patterns):
-            skipped += 1
-            continue
-        trajectory_path = child / "agent" / "trajectory.json"
-        if trajectory_path.exists():
-            yield trajectory_path
-    if exclusion_patterns and skipped:
-        print(f"  [repo-filter] (t2-chaofan) excluded {skipped} dirs")
-
-
 def main() -> None:
     args = parse_args()
-    source_dir = args.source_dir
+    job_dir = args.job_dir
+    if not job_dir.exists():
+        raise FileNotFoundError(f"Job 目录不存在: {job_dir}")
+
     output_im_path = args.im_output
     output_lf_path = args.lf_output
-    max_instances: int | None = args.max_instances
+    max_records: int | None = args.max_instances
+    if max_records is not None and max_records <= 0:
+        max_records = None
 
     output_lf_path.parent.mkdir(parents=True, exist_ok=True)
 
-    im_records: list[dict[str, Any]] = []
-    failures: list[tuple[str, str]] = []
+    resolved_folders = get_resolved_instances_from_job_dir(job_dir)
+    print(f"Total resolved instances: {len(resolved_folders)}")
 
     exclusion_patterns = load_exclusion_patterns(args.exclude_repos_file)
+    if exclusion_patterns:
+        instance_ids = [extract_instance_id(f) for f in resolved_folders]
+        kept_ids = set(filter_instance_ids_by_repo(
+            instance_ids, exclusion_patterns, label="t2",
+        ))
+        resolved_folders = [f for f in resolved_folders if extract_instance_id(f) in kept_ids]
 
-    result_json_path = source_dir / "result.json"
-    if result_json_path.exists():
-        resolved_ids: set[str] | None = set(get_resolved_instances(result_json_path))
-        print(f"  [result.json] found {len(resolved_ids)} resolved instances")
-    else:
-        resolved_ids = None
-        print(f"  [result.json] not found, treating all as resolved")
+    im_records: list[dict[str, Any]] = []
+    failures: list[tuple[str, str]] = []
+    missing: list[str] = []
 
-    for trajectory_path in iter_trajectory_files(source_dir, exclusion_patterns):
-        if max_instances is not None and len(im_records) >= max_instances:
-            break
+    for folder_name in resolved_folders:
+        instance_id = extract_instance_id(folder_name)
+        trajectory_path = job_dir / folder_name / "agent" / "trajectory.json"
 
-        instance_id = trajectory_path.parent.parent.name
-        if resolved_ids is not None and instance_id not in resolved_ids:
+        if not trajectory_path.exists():
+            missing.append(folder_name)
             continue
 
         try:
@@ -115,16 +111,25 @@ def main() -> None:
                 raise ValueError("No valid record found")
 
             for r in all_records:
-                if max_instances is not None and len(im_records) >= max_instances:
-                    break
                 im_record = convert_one_record(r)
-                im_record["_instance_id"] = trajectory_path.parent.parent.name
+                im_record["_instance_id"] = instance_id
                 im_records.append(im_record)
+                if max_records is not None and len(im_records) >= max_records:
+                    break
         except Exception as e:
             failures.append((str(trajectory_path), str(e)))
 
-        if max_instances is not None and len(im_records) >= max_instances:
+        if max_records is not None and len(im_records) >= max_records:
             break
+
+    print(f"Resolved folders: {len(resolved_folders)}, missing trajectory: {len(missing)}")
+    if missing and len(missing) <= 30:
+        for m in missing:
+            print(f"  [missing] {m}")
+    elif missing:
+        for m in missing[:20]:
+            print(f"  [missing] {m}")
+        print(f"  ... and {len(missing) - 20} more missing")
 
     im_records = score_dataset(im_records, quiet=True)
     lf_records = [to_lf_record(r) for r in im_records]

@@ -11,8 +11,9 @@ from swe_data_process.utils import (
     EXCLUDED_REPOS_FILE,
     check_roles,
     check_reasoning_content,
+    extract_instance_id,
     filter_instance_ids_by_repo,
-    get_resolved_instances,
+    get_resolved_instances_from_job_dir,
     load_exclusion_patterns,
     save_jsonl,
     save_lf_json,
@@ -20,35 +21,28 @@ from swe_data_process.utils import (
 
 
 DEFAULT_JOB_DIR = Path(
-    "/home/ywxzml3j/ywxzml3juser30/code/harbor/jobs/"
-    "swerebench-filtered-oraclesolved-openhands-sdk-1.14.0-GLM-5-FP8-30-20260322001450"
+    "/home/ywxzml3j/ywxzml3juser57/code/harbor-dev/jobs/"
+    "swebench-verified-100-custom-openhands-sdk-1.14.0-Qwen3-Coder-30B-A3B-Instruct-20260507094527"
 )
-DEFAULT_TRAJ_DIR = Path(f"{DEFAULT_JOB_DIR}_trajs_via_logger")
 DEFAULT_IM_OUTPUT = Path(
     "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "jierun_glm5_swerebench_oraclesolved_oh_sdk_1k.jsonl"
+    "glm5_swerebench_oraclesolved_oh_sdk_1k.jsonl"
 )
 DEFAULT_LF_OUTPUT = Path(
     "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "jierun_glm5_swerebench_oraclesolved_oh_sdk_1k.json"
+    "glm5_swerebench_oraclesolved_oh_sdk_1k.json"
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="将 OpenHands SDK jierun Harbor job + logger 轨迹转为 IM（JSONL）与 LF JSON"
+        description="将 OpenHands SDK Harbor job 轨迹转为 IM（JSONL）与 LF JSON"
     )
     parser.add_argument(
         "--job-dir",
         type=Path,
         default=DEFAULT_JOB_DIR,
-        help="Harbor job 目录（含 result.json）",
-    )
-    parser.add_argument(
-        "--trajs-dir",
-        type=Path,
-        default=DEFAULT_TRAJ_DIR,
-        help="logger 导出的 jsonl 目录",
+        help="Harbor job 目录",
     )
     parser.add_argument(
         "--im-output",
@@ -108,7 +102,7 @@ def _normalize_message(msg: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_messages_from_logger_record(record: dict[str, Any]) -> tuple[list[dict[str, Any]] | None, str | None]:
-    """request_body.messages + final choice message, normalized like chaofan pipeline."""
+    """request_body.messages + final choice message, normalized."""
     raw_messages = record['request_body']['messages']
     messages = [_normalize_message(m) for m in raw_messages]
 
@@ -131,54 +125,54 @@ def read_last_jsonl_record(jsonl_path: Path) -> dict[str, Any] | None:
     return last
 
 
+def _infer_think_mode(messages: list[dict[str, Any]]) -> str:
+    """根据 assistant 消息是否包含 reasoning_content 推断 think_mode。"""
+    for msg in messages:
+        if msg.get("role") == "assistant" and msg.get("reasoning_content"):
+            return "slow"
+    return "fast"
+
+
 def convert_dataset(
-    traj_path: Path,
-    trajs_via_logger_path: Path,
+    job_dir: Path,
     max_samples: int | None = None,
     exclusion_patterns: list | None = None,
 ) -> list[dict[str, Any]]:
-    result_json_path = traj_path / "result.json"
-    resolved_instances = get_resolved_instances(result_json_path)
+    resolved_folders = get_resolved_instances_from_job_dir(job_dir)
     if exclusion_patterns:
-        resolved_instances = filter_instance_ids_by_repo(
-            resolved_instances, exclusion_patterns, label="oh-sdk-jierun",
-        )
+        instance_ids = [extract_instance_id(f) for f in resolved_folders]
+        kept_ids = set(filter_instance_ids_by_repo(
+            instance_ids, exclusion_patterns, label="oh-sdk",
+        ))
+        resolved_folders = [f for f in resolved_folders if extract_instance_id(f) in kept_ids]
+
     im_data: list[dict[str, Any]] = []
-    skipped_no_logger = 0
+    skipped_no_traj = 0
     skipped_no_choices = 0
     skipped_invalid = 0
 
-    for instance_id in tqdm(resolved_instances):
-        config_path = traj_path / instance_id / 'config.json'
-        try:
-            with config_path.open('r', encoding='utf-8') as f:
-                config = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            skipped_no_logger += 1
-            print(f"跳过 {instance_id}: 无法读取 config.json — {e}")
-            continue
-
-        extracted_instance_id = Path(config['task']['path']).name
-        jsonl_path = trajs_via_logger_path / f'{extracted_instance_id}.jsonl'
+    for folder_name in tqdm(resolved_folders):
+        instance_id = extract_instance_id(folder_name)
+        traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
 
         try:
-            trajs_via_logger = read_last_jsonl_record(jsonl_path)
+            last_record = read_last_jsonl_record(traj_file)
         except FileNotFoundError:
-            skipped_no_logger += 1
-            print(f"File not found for instance {instance_id}: {jsonl_path}")
+            skipped_no_traj += 1
+            print(f"File not found for instance {instance_id}: {traj_file}")
             continue
         except (json.JSONDecodeError, OSError) as e:
             skipped_invalid += 1
-            print(f"读取 logger 失败 {instance_id}: {e}")
+            print(f"读取轨迹失败 {instance_id}: {e}")
             continue
 
-        if trajs_via_logger is None:
-            skipped_no_logger += 1
-            print(f"Empty jsonl for instance {instance_id}: {jsonl_path}")
+        if last_record is None:
+            skipped_no_traj += 1
+            print(f"Empty jsonl for instance {instance_id}: {traj_file}")
             continue
 
         try:
-            messages, err = build_messages_from_logger_record(trajs_via_logger)
+            messages, err = build_messages_from_logger_record(last_record)
         except (KeyError, TypeError, IndexError) as e:
             skipped_invalid += 1
             print(f"解析轨迹失败 {instance_id}: {e}")
@@ -189,13 +183,14 @@ def convert_dataset(
             print(f"No choices found in response for instance {instance_id}")
             continue
 
-        tools = trajs_via_logger['request_body'].get('tools', [])
+        tools = last_record['request_body'].get('tools', [])
+        think_mode = _infer_think_mode(messages)
 
         if not check_roles(messages):
             skipped_invalid += 1
             continue
 
-        if not check_reasoning_content(messages, think_mode='slow', pseudo_turns=None):
+        if not check_reasoning_content(messages, think_mode=think_mode, pseudo_turns=None):
             skipped_invalid += 1
             print(f"Instance {instance_id} failed reasoning content check.")
             continue
@@ -204,7 +199,7 @@ def convert_dataset(
             'messages': messages,
             'tools': tools,
             'pseudo_turns': None,
-            'think_mode': 'slow',
+            'think_mode': think_mode,
             '_instance_id': instance_id,
         })
 
@@ -212,7 +207,7 @@ def convert_dataset(
             break
 
     print(f"Total sampled instances: {len(im_data)}")
-    print(f"Skipped (no config / logger file / empty jsonl): {skipped_no_logger}")
+    print(f"Skipped (no traj file / empty jsonl): {skipped_no_traj}")
     print(f"Skipped (no choices in response): {skipped_no_choices}")
     print(f"Skipped (invalid / roles / reasoning): {skipped_invalid}")
     return im_data
@@ -221,29 +216,26 @@ def convert_dataset(
 def main() -> None:
     args = parse_args()
     job_dir = args.job_dir
-    trajs_dir = args.trajs_dir
+    if not job_dir.exists():
+        raise FileNotFoundError(f"Job 目录不存在: {job_dir}")
 
     max_samples: int | None = args.max_instances
     if max_samples is not None and max_samples <= 0:
         max_samples = None
 
-    im_output = args.im_output
-    lf_output = args.lf_output
-
     im_data = convert_dataset(
         job_dir,
-        trajs_dir,
         max_samples=max_samples,
         exclusion_patterns=load_exclusion_patterns(args.exclude_repos_file),
     )
 
     im_data = score_dataset(im_data, quiet=True)
 
-    save_jsonl(im_output, im_data)
-    save_lf_json(lf_output, im_data)
+    save_jsonl(args.im_output, im_data)
+    save_lf_json(args.lf_output, im_data)
 
-    print(f"IM output: {im_output}")
-    print(f"LF output: {lf_output}")
+    print(f"IM output: {args.im_output}")
+    print(f"LF output: {args.lf_output}")
 
 
 if __name__ == '__main__':

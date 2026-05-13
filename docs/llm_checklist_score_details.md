@@ -140,20 +140,20 @@ export OPENAI_BASE_URL="https://..."  # 可选
 
 # 基本用法
 python -m swe_data_process.llm_checklist_score \
-    --input artifacts/cc_jierun_im.jsonl \
-    --output artifacts/cc_jierun_im_checklist_scored.jsonl \
+    --input artifacts/cc_im.jsonl \
+    --output artifacts/cc_im_checklist_scored.jsonl \
     --model gpt-4o-mini --concurrency 8
 
 # checklist 生成和 judge 使用不同模型
 python -m swe_data_process.llm_checklist_score \
-    --input artifacts/cc_jierun_im.jsonl \
+    --input artifacts/cc_im.jsonl \
     --checklist-model gpt-4o-mini \
     --judge-model gpt-4o \
     --concurrency 8
 
 # 不包含系统提示词（默认包含）
 python -m swe_data_process.llm_checklist_score \
-    --input artifacts/cc_jierun_im.jsonl \
+    --input artifacts/cc_im.jsonl \
     --no-system-prompt
 
 # 用于不支持 response_format 的 API

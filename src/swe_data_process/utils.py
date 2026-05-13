@@ -815,8 +815,13 @@ def replace_system_model_name(
         first_message["content"] = content.replace(source_model, target_model)
 
 
-def get_resolved_instances(result_json: Path) -> list[str]:
-    """Read resolved (reward=1.0) instance IDs from Harbor result.json."""
+def get_resolved_instances_from_job_dir(job_dir: Path) -> list[str]:
+    """Read resolved (reward=1.0) folder names from job_dir/result.json.
+
+    Returns folder names (with hash suffix, e.g. 'astropy__astropy-7606__nCRsfSp').
+    Use extract_instance_id() to get the bare instance_id for tagging.
+    """
+    result_json = job_dir / "result.json"
     with result_json.open("r", encoding="utf-8") as f:
         result = json.load(f)
     evals = result["stats"]["evals"]
@@ -824,6 +829,14 @@ def get_resolved_instances(result_json: Path) -> list[str]:
     for key in evals:
         resolved.extend(evals[key]["reward_stats"]["reward"]["1.0"])
     return resolved
+
+
+def extract_instance_id(folder_name: str) -> str:
+    """Extract instance_id from folder name by removing the hash suffix.
+
+    e.g. 'astropy__astropy-7606__nCRsfSp' -> 'astropy__astropy-7606'
+    """
+    return folder_name.rsplit("__", 1)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -884,7 +897,7 @@ def build_repo_exclusion_patterns(repos: Iterable[str]) -> list[re.Pattern[str]]
 
     Each reference repo ``"owner/repo_name"`` produces a pattern that matches
     instance_ids of the form ``owner__repo_name-<digits>`` with an optional
-    ``__<hash>`` suffix (jierun format).
+    ``__<hash>`` suffix (.
 
     Returns a list of compiled regex patterns.
     """

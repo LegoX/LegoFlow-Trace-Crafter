@@ -9,8 +9,8 @@
   export OPENAI_BASE_URL="..."
   export OPENAI_API_KEY="sk-..."
   python -m swe_data_process.llm_score \
-      --input artifacts/cc_jierun_im.jsonl \
-      --output artifacts/cc_jierun_im_llm_scored.jsonl \
+      --input artifacts/cc_im.jsonl \
+      --output artifacts/cc_im_llm_scored.jsonl \
       --model gpt-4o --concurrency 10
 """
 
