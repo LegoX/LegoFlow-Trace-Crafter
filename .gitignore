@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .claude/
 *.jsonl
+!artifacts/*.jsonl
 *_openai_format*.json
 *.egg-info/
 
