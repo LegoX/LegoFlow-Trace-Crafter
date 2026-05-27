@@ -32,6 +32,8 @@ _PANGUML_COMPAT_UNIQUE_INFO_KEYS = (
     "_instance_id",
     "_agent_type",
     "_score",
+    "_gen_params",
+    "_usage",
 )
 
 
@@ -637,6 +639,10 @@ def convert_json_to_lf_format(
             lf_record['_instance_id'] = item['_instance_id']
         if '_agent_type' in item:
             lf_record['_agent_type'] = item['_agent_type']
+        if '_gen_params' in item:
+            lf_record['_gen_params'] = item['_gen_params']
+        if '_usage' in item:
+            lf_record['_usage'] = item['_usage']
         lf_all_json_data.append(lf_record)
 
     stats: dict[str, Any] = {}

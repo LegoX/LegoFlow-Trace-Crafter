@@ -2,6 +2,7 @@
 """
 对齐 mini-vela/convert/dedup.py 的去重语义，对单个 instance 的 JSONL 轨迹做子轨迹去重：
 
+0) 过滤 logger 标记 success=false 的失败调用（HTTP 超时/5xx/上游拒答等）
 1) 按 request_time 升序排序
 2) 规范化 input：深拷贝后剥除 cache_control / signature / generation 字段；
    剔除 message.content 列表中 type=thinking 的 item；首条 user message 的
@@ -125,6 +126,11 @@ def deduplicate_trajectories(input_jsonl: str | Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError as e:
                 print(f"[WARN] line {line_no} 不是合法 JSON，已跳过: {e}")
 
+    # 显式过滤 logger 标记为失败的调用 (HTTP 超时 / 5xx / 上游拒答等)。
+    # 这些行的 response_body 通常是错误结构，若让它们进入前缀去重，
+    # 偶尔会作为"最长扩展"被保留，污染下游 convert_record。
+    records = filter_failed_records(records)
+
     # 对齐 mini-vela：去重前按 request_time 升序（缺失视为 0，保持稳定序）
     records.sort(key=lambda r: r.get("request_time", 0))
 
@@ -145,6 +151,16 @@ def deduplicate_trajectories(input_jsonl: str | Path) -> list[dict[str, Any]]:
     survivors = [records[i] for i in range(len(records)) if keep[i]]
     filtered = filter_short_input_records(survivors)
     return deduplicate_exact_records(filtered)
+
+
+def filter_failed_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """过滤 logger 标记 success=false 的失败调用。
+
+    LiteLLM logger 在 HTTP 失败 / 上游拒答 / 超时 / 5xx 时把整行的
+    ``success`` 字段写成 ``false``，对应的 ``response_body`` 通常是错误结构。
+    缺失 ``success`` 字段的记录默认视为成功（向后兼容旧 logger）。
+    """
+    return [r for r in records if r.get("success", True) is not False]
 
 
 def filter_short_input_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

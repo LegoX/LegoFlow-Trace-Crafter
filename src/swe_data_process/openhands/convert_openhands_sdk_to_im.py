@@ -125,6 +125,28 @@ def read_last_jsonl_record(jsonl_path: Path) -> dict[str, Any] | None:
     return last
 
 
+def read_last_successful_jsonl_record(jsonl_path: Path) -> dict[str, Any] | None:
+    """Read the last LiteLLM logger record with ``success != False``.
+
+    LiteLLM writes ``success: false`` on HTTP failure / upstream rejection / 5xx
+    / timeout. The OpenHands SDK harness keeps retrying after such failures, so
+    a trailing run of failed lines can shadow the real final assistant turn.
+    We treat a missing ``success`` field as ``True`` (older logger versions).
+    Returns ``None`` if the file is empty or every line failed.
+    """
+    last = None
+    with jsonl_path.open('r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if record.get('success') is False:
+                continue
+            last = record
+    return last
+
+
 def _infer_think_mode(messages: list[dict[str, Any]]) -> str:
     """根据 assistant 消息是否包含 reasoning_content 推断 think_mode。"""
     for msg in messages:
@@ -150,13 +172,14 @@ def convert_dataset(
     skipped_no_traj = 0
     skipped_no_choices = 0
     skipped_invalid = 0
+    skipped_all_failed = 0
 
     for folder_name in tqdm(resolved_folders):
         instance_id = extract_instance_id(folder_name)
         traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
 
         try:
-            last_record = read_last_jsonl_record(traj_file)
+            last_record = read_last_successful_jsonl_record(traj_file)
         except FileNotFoundError:
             skipped_no_traj += 1
             print(f"File not found for instance {instance_id}: {traj_file}")
@@ -167,8 +190,8 @@ def convert_dataset(
             continue
 
         if last_record is None:
-            skipped_no_traj += 1
-            print(f"Empty jsonl for instance {instance_id}: {traj_file}")
+            skipped_all_failed += 1
+            print(f"No successful records (all success=false / empty) for instance {instance_id}: {traj_file}")
             continue
 
         try:
@@ -183,7 +206,8 @@ def convert_dataset(
             print(f"No choices found in response for instance {instance_id}")
             continue
 
-        tools = last_record['request_body'].get('tools', [])
+        request_body = last_record.get('request_body') or {}
+        tools = request_body.get('tools', [])
         think_mode = _infer_think_mode(messages)
 
         if not check_roles(messages):
@@ -195,12 +219,21 @@ def convert_dataset(
             print(f"Instance {instance_id} failed reasoning content check.")
             continue
 
+        gen_params = {
+            key: request_body.get(key)
+            for key in ('model', 'max_tokens', 'top_p', 'temperature')
+            if key in request_body
+        }
+        usage = last_record.get('usage')
+
         im_data.append({
             'messages': messages,
             'tools': tools,
             'pseudo_turns': None,
             'think_mode': think_mode,
             '_instance_id': instance_id,
+            '_gen_params': gen_params,
+            '_usage': usage,
         })
 
         if max_samples is not None and len(im_data) >= max_samples:
@@ -208,6 +241,7 @@ def convert_dataset(
 
     print(f"Total sampled instances: {len(im_data)}")
     print(f"Skipped (no traj file / empty jsonl): {skipped_no_traj}")
+    print(f"Skipped (all lines success=false): {skipped_all_failed}")
     print(f"Skipped (no choices in response): {skipped_no_choices}")
     print(f"Skipped (invalid / roles / reasoning): {skipped_invalid}")
     return im_data
