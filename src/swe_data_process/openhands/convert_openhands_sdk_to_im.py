@@ -206,7 +206,8 @@ def convert_dataset(
             print(f"No choices found in response for instance {instance_id}")
             continue
 
-        tools = last_record['request_body'].get('tools', [])
+        request_body = last_record.get('request_body') or {}
+        tools = request_body.get('tools', [])
         think_mode = _infer_think_mode(messages)
 
         if not check_roles(messages):
@@ -218,12 +219,21 @@ def convert_dataset(
             print(f"Instance {instance_id} failed reasoning content check.")
             continue
 
+        gen_params = {
+            key: request_body.get(key)
+            for key in ('model', 'max_tokens', 'top_p', 'temperature')
+            if key in request_body
+        }
+        usage = last_record.get('usage')
+
         im_data.append({
             'messages': messages,
             'tools': tools,
             'pseudo_turns': None,
             'think_mode': think_mode,
             '_instance_id': instance_id,
+            '_gen_params': gen_params,
+            '_usage': usage,
         })
 
         if max_samples is not None and len(im_data) >= max_samples:
