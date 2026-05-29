@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from swe_data_process.utils import load_jsonl, save_jsonl
+from swe_data_process.utils import load_jsonl, print_lf_token_stats_from_texts, save_jsonl
 
 
 class TestSaveJsonl:
@@ -84,3 +84,19 @@ class TestLoadJsonl:
         assert result[0]["_instance_id"] == "owner__repo-1"
         assert result[0]["_agent_type"] == "main"
         assert result[0]["_score"] == {"composite_score": 0.7}
+
+
+class TestTokenStats:
+    def test_includes_total_tokens(self):
+        class DummyTokenizer:
+            def __call__(self, texts, **kwargs):
+                return {"length": [len(text.split()) for text in texts]}
+
+        stats = print_lf_token_stats_from_texts(
+            ["one two", "three four five"],
+            [1, 2],
+            token_batch_size=1,
+            tokenizer=DummyTokenizer(),
+        )
+
+        assert stats["total_tokens"] == 5
