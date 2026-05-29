@@ -439,7 +439,8 @@ def print_lf_token_stats_from_texts(
 
     if tokenizer_name is not None:
         print(f"Tokenizer: {tokenizer_name}")
-    print(f"[token_lens]\nMax: {int(np.max(token_lens))}\nMin: {int(np.min(token_lens))}\nMean: {int(np.mean(token_lens))}")
+    total_tokens = int(sum(token_lens))
+    print(f"[token_lens]\nMax: {int(np.max(token_lens))}\nMin: {int(np.min(token_lens))}\nMean: {int(np.mean(token_lens))}\nTotal: {total_tokens}")
     print("num of token len larger than 128k: ", sum(length > 131072 for length in token_lens), "\n")
     print(f"[n_turn]\nMax: {int(np.max(n_turns))}\nMin: {int(np.min(n_turns))}\nMean: {int(np.mean(n_turns))}")
     print("num of n_turn >= 100: ", sum(turns >= 100 for turns in n_turns), "\n")
@@ -447,6 +448,7 @@ def print_lf_token_stats_from_texts(
     return {
         "token_lens": {"max": int(np.max(token_lens)), "min": int(np.min(token_lens)), "mean": int(np.mean(token_lens)), "gt_128k": int(sum(length > 131072 for length in token_lens))},
         "n_turns": {"max": int(np.max(n_turns)), "min": int(np.min(n_turns)), "mean": int(np.mean(n_turns)), "gte_100": int(sum(turns >= 100 for turns in n_turns))},
+        "total_tokens": total_tokens,
         "count": len(texts_for_token_stats),
     }
 
