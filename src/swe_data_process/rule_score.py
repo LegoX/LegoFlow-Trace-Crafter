@@ -1399,6 +1399,162 @@ def print_score_summary(scored_records: list[dict[str, Any]]) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Dataset-level tool-call error rate
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _count_tool_call_errors(
+    record: dict[str, Any],
+    scaffold: str,
+) -> tuple[int, int]:
+    """统计单条 IM 记录的 (总 tool 调用数, 错误 tool 调用数)。
+
+    口径与 _compute_c1 完全对齐：
+
+    - tool-call 脚手架（CC/OC/OpenHands）：每个 role="tool" observation 记为
+      一次 tool 调用；该 observation 报错则记为一次错误调用。
+    - Terminus2：一个 observation（user 反馈）覆盖前一个 assistant turn 的所有
+      commands，因此 total 按 len(commands) 加权；该 observation 报错时按 1 个
+      command 失败计（与 _compute_c1 的保守估计一致）。
+
+    错误判定复用 _is_error_result，并沿用 C1 的 test-output 处理：测试命令产生的
+    observation 只匹配明确执行错误（Tier 1），避免 pytest 预期失败被误判为工具
+    调用错误。
+    """
+    messages = record.get("messages", []) or []
+    observations = _extract_observations(messages, scaffold)
+    if not observations:
+        return 0, 0
+
+    if scaffold == "terminus2":
+        total = 0
+        errors = 0
+        for obs in observations:
+            n_cmds = 1
+            is_test = False
+            prev_idx = obs.get("prev_assistant_idx")
+            if prev_idx is not None:
+                prev_msg = messages[prev_idx]
+                is_test = _is_test_running_turn(prev_msg, scaffold)
+                parsed = _parse_t2_assistant(prev_msg)
+                if parsed is not None:
+                    cmds = parsed.get("commands") or []
+                    if cmds:
+                        n_cmds = len(cmds)
+            total += n_cmds
+            if _is_error_result(obs.get("content", ""), is_test_output=is_test):
+                errors += 1
+        return total, errors
+
+    total = 0
+    errors = 0
+    _test_flags_cache: dict[int, list[bool]] = {}
+    for obs in observations:
+        is_test = False
+        prev_idx = obs.get("prev_assistant_idx")
+        if prev_idx is not None:
+            if prev_idx not in _test_flags_cache:
+                _test_flags_cache[prev_idx] = _get_per_toolcall_test_flags(messages[prev_idx])
+            flags = _test_flags_cache[prev_idx]
+            pos = obs.get("tool_call_position", 0)
+            is_test = flags[pos] if pos < len(flags) else False
+        total += 1
+        if _is_error_result(obs.get("content", ""), is_test_output=is_test):
+            errors += 1
+    return total, errors
+
+
+def compute_tool_call_error_rate(
+    records: list[dict[str, Any]],
+    scaffold_override: str | None = None,
+) -> dict[str, Any]:
+    """计算数据集级别的工具调用错误率（基于 IM 记录）。
+
+    - 轮次维度: error_rate = 错误 tool 调用数 / 总 tool 调用数
+    - 轨迹维度: trajectory_error_rate = 含错误的轨迹数 / 含 tool 调用的轨迹数
+
+    错误判定复用 rule_score 的错误正则与 test-output 处理，因此该聚合指标与
+    单条轨迹的 c1_tool_success_rate 口径一致。统计涵盖全部记录（含 subagent）。
+    """
+    total_tool_calls = 0
+    error_tool_calls = 0
+    trajectories_with_tool_calls = 0
+    trajectories_with_error = 0
+    by_scaffold: dict[str, dict[str, int]] = {}
+
+    for record in records:
+        scaffold = scaffold_override or detect_scaffold(record)
+        total, errors = _count_tool_call_errors(record, scaffold)
+        if total == 0:
+            continue
+
+        total_tool_calls += total
+        error_tool_calls += errors
+        trajectories_with_tool_calls += 1
+        if errors > 0:
+            trajectories_with_error += 1
+
+        bucket = by_scaffold.setdefault(scaffold, {
+            "total_tool_calls": 0,
+            "error_tool_calls": 0,
+            "trajectories_with_tool_calls": 0,
+            "trajectories_with_error": 0,
+        })
+        bucket["total_tool_calls"] += total
+        bucket["error_tool_calls"] += errors
+        bucket["trajectories_with_tool_calls"] += 1
+        if errors > 0:
+            bucket["trajectories_with_error"] += 1
+
+    for bucket in by_scaffold.values():
+        bt = bucket["total_tool_calls"]
+        btr = bucket["trajectories_with_tool_calls"]
+        bucket["error_rate"] = round(bucket["error_tool_calls"] / bt, 6) if bt else 0.0
+        bucket["trajectory_error_rate"] = (
+            round(bucket["trajectories_with_error"] / btr, 6) if btr else 0.0
+        )
+
+    return {
+        "total_tool_calls": total_tool_calls,
+        "error_tool_calls": error_tool_calls,
+        "error_rate": round(error_tool_calls / total_tool_calls, 6) if total_tool_calls else 0.0,
+        "trajectories_with_tool_calls": trajectories_with_tool_calls,
+        "trajectories_with_error": trajectories_with_error,
+        "trajectory_error_rate": (
+            round(trajectories_with_error / trajectories_with_tool_calls, 6)
+            if trajectories_with_tool_calls else 0.0
+        ),
+        "by_scaffold": by_scaffold,
+    }
+
+
+def print_tool_call_error_summary(stats: dict[str, Any]) -> None:
+    """打印数据集级别工具调用错误率汇总。"""
+    if not stats or not stats.get("total_tool_calls"):
+        print("  工具调用错误率: N/A (无 tool 调用)")
+        return
+
+    print(f"\n{'═' * 72}")
+    print("  工具调用错误率统计 (基于 IM)")
+    print(f"{'═' * 72}")
+    print(f"  【按轮次维度】 错误 {stats['error_tool_calls']} / 总 {stats['total_tool_calls']} "
+          f"= {stats['error_rate']:.4f} ({stats['error_rate'] * 100:.2f}%)")
+    print(f"  【按轨迹维度】 含错误轨迹 {stats['trajectories_with_error']} / "
+          f"含 tool 调用轨迹 {stats['trajectories_with_tool_calls']} "
+          f"= {stats['trajectory_error_rate']:.4f} ({stats['trajectory_error_rate'] * 100:.2f}%)")
+
+    by_scaffold = stats.get("by_scaffold") or {}
+    if len(by_scaffold) > 1:
+        print("  按脚手架:")
+        for scaffold in sorted(by_scaffold):
+            b = by_scaffold[scaffold]
+            print(f"    [{scaffold}] 轮次错误率 {b['error_rate']:.4f} "
+                  f"({b['error_tool_calls']}/{b['total_tool_calls']}), "
+                  f"轨迹错误率 {b['trajectory_error_rate']:.4f} "
+                  f"({b['trajectories_with_error']}/{b['trajectories_with_tool_calls']})")
+    print()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════
 

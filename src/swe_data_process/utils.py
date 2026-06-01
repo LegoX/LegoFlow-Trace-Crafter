@@ -707,6 +707,18 @@ def save_lf_json(output_path: Path, records: list[dict[str, Any]]) -> None:
     """Convert IM records to LF format and save as JSON + stats sidecar."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lf_all_json_data, stats = convert_json_to_lf_format(records)
+
+    # 工具调用错误率基于 IM 记录计算（此时 role="tool" 结果尚未被 LF 合并），
+    # 局部导入避免 utils <-> rule_score 循环依赖。
+    from swe_data_process.rule_score import (
+        compute_tool_call_error_rate,
+        print_tool_call_error_summary,
+    )
+    tool_call_errors = compute_tool_call_error_rate(records)
+    print_tool_call_error_summary(tool_call_errors)
+    stats = stats or {}
+    stats["tool_call_errors"] = tool_call_errors
+
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(lf_all_json_data, f, ensure_ascii=False, indent=4)
     if stats:
