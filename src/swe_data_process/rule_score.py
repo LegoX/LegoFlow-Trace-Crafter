@@ -1408,15 +1408,42 @@ def _count_tool_call_errors(
 ) -> tuple[int, int]:
     """统计单条 IM 记录的 (总 tool 调用数, 错误 tool 调用数)。
 
-    每个 observation（tool-call 脚手架的 role="tool" 消息 / T2 的 user 反馈）
-    视为一次 tool 调用结果。错误判定复用 _is_error_result，并沿用 C1 的
-    test-output 处理：测试命令产生的 observation 只匹配明确执行错误（Tier 1），
-    避免 pytest 预期失败被误判为工具调用错误。
+    口径与 _compute_c1 完全对齐：
+
+    - tool-call 脚手架（CC/OC/OpenHands）：每个 role="tool" observation 记为
+      一次 tool 调用；该 observation 报错则记为一次错误调用。
+    - Terminus2：一个 observation（user 反馈）覆盖前一个 assistant turn 的所有
+      commands，因此 total 按 len(commands) 加权；该 observation 报错时按 1 个
+      command 失败计（与 _compute_c1 的保守估计一致）。
+
+    错误判定复用 _is_error_result，并沿用 C1 的 test-output 处理：测试命令产生的
+    observation 只匹配明确执行错误（Tier 1），避免 pytest 预期失败被误判为工具
+    调用错误。
     """
     messages = record.get("messages", []) or []
     observations = _extract_observations(messages, scaffold)
     if not observations:
         return 0, 0
+
+    if scaffold == "terminus2":
+        total = 0
+        errors = 0
+        for obs in observations:
+            n_cmds = 1
+            is_test = False
+            prev_idx = obs.get("prev_assistant_idx")
+            if prev_idx is not None:
+                prev_msg = messages[prev_idx]
+                is_test = _is_test_running_turn(prev_msg, scaffold)
+                parsed = _parse_t2_assistant(prev_msg)
+                if parsed is not None:
+                    cmds = parsed.get("commands") or []
+                    if cmds:
+                        n_cmds = len(cmds)
+            total += n_cmds
+            if _is_error_result(obs.get("content", ""), is_test_output=is_test):
+                errors += 1
+        return total, errors
 
     total = 0
     errors = 0
@@ -1425,14 +1452,11 @@ def _count_tool_call_errors(
         is_test = False
         prev_idx = obs.get("prev_assistant_idx")
         if prev_idx is not None:
-            if scaffold == "terminus2":
-                is_test = _is_test_running_turn(messages[prev_idx], scaffold)
-            else:
-                if prev_idx not in _test_flags_cache:
-                    _test_flags_cache[prev_idx] = _get_per_toolcall_test_flags(messages[prev_idx])
-                flags = _test_flags_cache[prev_idx]
-                pos = obs.get("tool_call_position", 0)
-                is_test = flags[pos] if pos < len(flags) else False
+            if prev_idx not in _test_flags_cache:
+                _test_flags_cache[prev_idx] = _get_per_toolcall_test_flags(messages[prev_idx])
+            flags = _test_flags_cache[prev_idx]
+            pos = obs.get("tool_call_position", 0)
+            is_test = flags[pos] if pos < len(flags) else False
         total += 1
         if _is_error_result(obs.get("content", ""), is_test_output=is_test):
             errors += 1

@@ -13,9 +13,11 @@ from swe_data_process.rule_score import (
     _compute_d2,
     _compute_e1,
     _compute_e2,
+    _count_tool_call_errors,
     _extract_actions,
     _extract_observations,
     _is_error_result,
+    compute_tool_call_error_rate,
     detect_scaffold,
     score_record,
 )
@@ -260,6 +262,159 @@ class TestComputeC1:
 
     def test_empty_observations(self):
         assert _compute_c1([], [], "claudecode") == 1.0
+
+
+class TestComputeToolCallErrorRate:
+    @staticmethod
+    def _cc_record(tool_contents: list[str]) -> dict:
+        messages: list[dict] = [
+            {"role": "system", "content": "You are Claude Code, by Anthropic."},
+            {"role": "user", "content": "fix"},
+        ]
+        for content in tool_contents:
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"type": "function", "function": {"name": "Bash", "arguments": '{"command":"ls"}'}}],
+            })
+            messages.append({"role": "tool", "content": content})
+        messages.append({"role": "assistant", "content": "done"})
+        return {
+            "messages": messages,
+            "tools": [
+                {"type": "function", "function": {"name": "Bash"}},
+                {"type": "function", "function": {"name": "Read"}},
+                {"type": "function", "function": {"name": "Edit"}},
+            ],
+        }
+
+    @staticmethod
+    def _t2_record(commands: list[str], obs_content: str) -> dict:
+        assistant_json = json.dumps({"commands": [{"keystrokes": c} for c in commands]})
+        return {
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": assistant_json},
+                {"role": "user", "content": obs_content},
+            ],
+            # T2 has no tools field -> detect_scaffold returns terminus2
+        }
+
+    def test_single_tool_call_scaffold_one_error(self):
+        record = self._cc_record(["ok output", "bash: bad: command not found", "ok"])
+        total, errors = _count_tool_call_errors(record, "claudecode")
+        assert (total, errors) == (3, 1)
+
+        stats = compute_tool_call_error_rate([record])
+        assert stats["total_tool_calls"] == 3
+        assert stats["error_tool_calls"] == 1
+        assert stats["error_rate"] == pytest.approx(1 / 3, rel=1e-3)
+        assert stats["trajectories_with_tool_calls"] == 1
+        assert stats["trajectories_with_error"] == 1
+        assert stats["trajectory_error_rate"] == 1.0
+
+    def test_tool_use_error_counts(self):
+        record = self._cc_record(["<tool_use_error>invalid args", "fine"])
+        total, errors = _count_tool_call_errors(record, "claudecode")
+        assert (total, errors) == (2, 1)
+
+    def test_terminus2_weighted_by_command_count(self):
+        # 3 commands in one assistant turn, single non-error observation
+        record = self._t2_record(["ls", "cat foo", "pwd"], "file listing\n")
+        total, errors = _count_tool_call_errors(record, "terminus2")
+        assert total == 3
+        assert errors == 0
+
+    def test_terminus2_error_counts_one_failed_command(self):
+        record = self._t2_record(["ls", "bad-cmd"], "bash: bad-cmd: command not found")
+        total, errors = _count_tool_call_errors(record, "terminus2")
+        # total weighted by 2 commands; error observation counts as 1 failed command
+        assert total == 2
+        assert errors == 1
+
+    def test_test_run_failed_output_not_counted(self):
+        # A pytest run whose output contains FAILED must NOT count as a tool error
+        record = {
+            "messages": [
+                {"role": "system", "content": "You are Claude Code, by Anthropic."},
+                {"role": "user", "content": "run tests"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"type": "function", "function": {"name": "Bash", "arguments": '{"command":"pytest tests/"}'}}],
+                },
+                {"role": "tool", "content": "FAILED tests/test_foo.py::test_x - assert 1 == 2"},
+                {"role": "assistant", "content": "done"},
+            ],
+            "tools": [
+                {"type": "function", "function": {"name": "Bash"}},
+                {"type": "function", "function": {"name": "Read"}},
+                {"type": "function", "function": {"name": "Edit"}},
+            ],
+        }
+        total, errors = _count_tool_call_errors(record, "claudecode")
+        assert total == 1
+        assert errors == 0
+
+    def test_test_run_hard_error_still_counted(self):
+        # Even in a test-run turn, a hard execution error (Tier 1) should count
+        record = {
+            "messages": [
+                {"role": "system", "content": "You are Claude Code, by Anthropic."},
+                {"role": "user", "content": "run tests"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"type": "function", "function": {"name": "Bash", "arguments": '{"command":"pytest tests/"}'}}],
+                },
+                {"role": "tool", "content": "pytest: command not found"},
+                {"role": "assistant", "content": "done"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "Bash"}}, {"type": "function", "function": {"name": "Read"}}, {"type": "function", "function": {"name": "Edit"}}],
+        }
+        total, errors = _count_tool_call_errors(record, "claudecode")
+        assert (total, errors) == (1, 1)
+
+    def test_per_scaffold_bucketing_and_aggregate(self):
+        cc = self._cc_record(["ok", "Permission denied"])
+        t2 = self._t2_record(["ls", "pwd"], "ok output")
+        stats = compute_tool_call_error_rate([cc, t2])
+
+        assert stats["total_tool_calls"] == 4  # cc: 2, t2: 2 commands
+        assert stats["error_tool_calls"] == 1
+        assert stats["error_rate"] == pytest.approx(0.25, rel=1e-3)
+        assert stats["trajectories_with_tool_calls"] == 2
+        assert stats["trajectories_with_error"] == 1
+
+        by = stats["by_scaffold"]
+        assert set(by) == {"claudecode", "terminus2"}
+        assert by["claudecode"]["total_tool_calls"] == 2
+        assert by["claudecode"]["error_tool_calls"] == 1
+        assert by["claudecode"]["error_rate"] == pytest.approx(0.5, rel=1e-3)
+        assert by["terminus2"]["total_tool_calls"] == 2
+        assert by["terminus2"]["error_tool_calls"] == 0
+        assert by["terminus2"]["error_rate"] == 0.0
+
+    def test_record_without_tool_calls_skipped(self):
+        record = {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "Bash"}}, {"type": "function", "function": {"name": "Read"}}, {"type": "function", "function": {"name": "Edit"}}],
+        }
+        stats = compute_tool_call_error_rate([record])
+        assert stats["total_tool_calls"] == 0
+        assert stats["trajectories_with_tool_calls"] == 0
+        assert stats["error_rate"] == 0.0
+        assert stats["by_scaffold"] == {}
+
+    def test_empty_dataset(self):
+        stats = compute_tool_call_error_rate([])
+        assert stats["total_tool_calls"] == 0
+        assert stats["error_rate"] == 0.0
+        assert stats["trajectory_error_rate"] == 0.0
+        assert stats["by_scaffold"] == {}
 
 
 class TestComputeD1:
