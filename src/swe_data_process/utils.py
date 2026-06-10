@@ -455,7 +455,7 @@ def print_lf_token_stats_from_texts(
 
 def print_lf_token_stats(
     lf_records: list[dict[str, Any]],
-    tokenizer_name: str = "Qwen/Qwen3-8B",
+    tokenizer_name: str = "Qwen/Qwen3.5-35B-A3B",
     token_batch_size: int = 64,
     stats_output_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -579,7 +579,7 @@ def check_reasoning_content(
 
 def convert_json_to_lf_format(
     all_json_data: list[dict[str, Any]],
-    tokenizer_name: str = "Qwen/Qwen3-8B",
+    tokenizer_name: str = "Qwen/Qwen3.5-35B-A3B",
     compute_token_stats: bool = True,
     token_batch_size: int = 64,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -820,7 +820,7 @@ def filter_by_score_bundled(
 def replace_system_model_name(
     messages: list[dict[str, Any]],
     source_model: str = "GLM-5-FP8",
-    target_model: str = "Qwen3-8B",
+    target_model: str = "Qwen3.5-35B-A3B",
 ) -> None:
     """Replace model name in the system message (first message) in-place."""
     if not messages:
