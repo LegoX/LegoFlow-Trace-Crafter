@@ -10,6 +10,7 @@ from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
     EXCLUDED_REPOS_FILE,
     check_roles,
+    check_tool_calls,
     check_reasoning_content,
     extract_instance_id_from_config,
     filter_instance_ids_by_repo,
@@ -93,7 +94,8 @@ def _normalize_message(msg: dict[str, Any]) -> dict[str, Any]:
             'tool_calls': process_tool_call(msg.get('tool_calls', [])),
         }
         if msg.get('reasoning_content') is not None:
-            out['reasoning_content'] = msg['reasoning_content']
+            rc = msg['reasoning_content']
+            out['reasoning_content'] = rc.strip() if isinstance(rc, str) else rc
         return out
     return {
         'role': role,
@@ -214,6 +216,10 @@ def convert_dataset(
         think_mode = _infer_think_mode(messages)
 
         if not check_roles(messages):
+            skipped_invalid += 1
+            continue
+
+        if not check_tool_calls(messages):
             skipped_invalid += 1
             continue
 

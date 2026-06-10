@@ -557,6 +557,20 @@ def check_roles(messages: list[dict[str, Any]]) -> bool:
     return True
 
 
+def check_tool_calls(messages: list[dict[str, Any]]) -> bool:
+    """检查除最后一轮 assistant 外，其余 assistant 轮次是否都有 tool_calls。"""
+    assistant_indices = [
+        i for i, msg in enumerate(messages) if msg.get("role") == "assistant"
+    ]
+    if not assistant_indices:
+        return True
+    for idx in assistant_indices[:-1]:
+        if not messages[idx].get("tool_calls"):
+            print(f"  [check_tool_calls] 异常数据，assistant 轮次缺少 tool_calls (idx={idx})")
+            return False
+    return True
+
+
 def check_reasoning_content(
     messages: list[dict[str, Any]],
     think_mode: str,
@@ -569,6 +583,7 @@ def check_reasoning_content(
     for idx in range(check_turns, len(messages)):
         msg = messages[idx]
         if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
+            print(f"  [check_reasoning_content] 异常数据，assistant 轮次缺少 reasoning_content (idx={idx})")
             return False
     return True
 

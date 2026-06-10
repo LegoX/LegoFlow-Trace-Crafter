@@ -11,6 +11,7 @@ from swe_data_process.utils import (
     EXCLUDED_REPOS_FILE,
     ProcessSummary,
     check_roles,
+    check_tool_calls,
     check_reasoning_content,
     extract_instance_id_from_config,
     filter_instance_ids_by_repo,
@@ -80,6 +81,10 @@ def process_one_instance(folder_name: str, job_dir: Path) -> tuple[list[dict], i
         replace_system_model_name(converted_record["messages"])
 
         if not check_roles(converted_record["messages"]):
+            role_filtered += 1
+            continue
+
+        if not check_tool_calls(converted_record["messages"]):
             role_filtered += 1
             continue
 
