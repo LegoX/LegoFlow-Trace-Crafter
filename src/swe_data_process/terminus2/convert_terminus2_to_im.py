@@ -7,7 +7,7 @@ from swe_data_process.terminus2.common import convert_one_record, iter_records, 
 from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
     EXCLUDED_REPOS_FILE,
-    extract_instance_id,
+    extract_instance_id_from_config,
     filter_instance_ids_by_repo,
     get_resolved_instances_from_job_dir,
     load_exclusion_patterns,
@@ -86,18 +86,21 @@ def main() -> None:
 
     exclusion_patterns = load_exclusion_patterns(args.exclude_repos_file)
     if exclusion_patterns:
-        instance_ids = [extract_instance_id(f) for f in resolved_folders]
+        instance_ids = [extract_instance_id_from_config(job_dir, f) for f in resolved_folders]
         kept_ids = set(filter_instance_ids_by_repo(
             instance_ids, exclusion_patterns, label="t2",
         ))
-        resolved_folders = [f for f in resolved_folders if extract_instance_id(f) in kept_ids]
+        resolved_folders = [
+            f for f in resolved_folders
+            if extract_instance_id_from_config(job_dir, f) in kept_ids
+        ]
 
     im_records: list[dict[str, Any]] = []
     failures: list[tuple[str, str]] = []
     missing: list[str] = []
 
     for folder_name in resolved_folders:
-        instance_id = extract_instance_id(folder_name)
+        instance_id = extract_instance_id_from_config(job_dir, folder_name)
         trajectory_path = job_dir / folder_name / "agent" / "trajectory.json"
 
         if not trajectory_path.exists():

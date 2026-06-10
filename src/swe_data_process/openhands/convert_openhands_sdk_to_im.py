@@ -11,7 +11,7 @@ from swe_data_process.utils import (
     EXCLUDED_REPOS_FILE,
     check_roles,
     check_reasoning_content,
-    extract_instance_id,
+    extract_instance_id_from_config,
     filter_instance_ids_by_repo,
     get_resolved_instances_from_job_dir,
     load_exclusion_patterns,
@@ -162,11 +162,14 @@ def convert_dataset(
 ) -> list[dict[str, Any]]:
     resolved_folders = get_resolved_instances_from_job_dir(job_dir)
     if exclusion_patterns:
-        instance_ids = [extract_instance_id(f) for f in resolved_folders]
+        instance_ids = [extract_instance_id_from_config(job_dir, f) for f in resolved_folders]
         kept_ids = set(filter_instance_ids_by_repo(
             instance_ids, exclusion_patterns, label="oh-sdk",
         ))
-        resolved_folders = [f for f in resolved_folders if extract_instance_id(f) in kept_ids]
+        resolved_folders = [
+            f for f in resolved_folders
+            if extract_instance_id_from_config(job_dir, f) in kept_ids
+        ]
 
     im_data: list[dict[str, Any]] = []
     skipped_no_traj = 0
@@ -175,7 +178,7 @@ def convert_dataset(
     skipped_all_failed = 0
 
     for folder_name in tqdm(resolved_folders):
-        instance_id = extract_instance_id(folder_name)
+        instance_id = extract_instance_id_from_config(job_dir, folder_name)
         traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
 
         try:

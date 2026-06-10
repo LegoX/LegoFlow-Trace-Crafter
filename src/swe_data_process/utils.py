@@ -859,6 +859,14 @@ def extract_instance_id(folder_name: str) -> str:
     return folder_name.rsplit("__", 1)[0]
 
 
+def extract_instance_id_from_config(job_dir: Path, folder_name: str) -> str:
+    """Read the authoritative instance_id from a Harbor instance config."""
+    config_path = job_dir / folder_name / "config.json"
+    with config_path.open("r", encoding="utf-8") as f:
+        config = json.load(f)
+    return Path(config["task"]["path"]).name
+
+
 # ---------------------------------------------------------------------------
 # Reference-repo filtering — exclude instances belonging to reference datasets
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ from swe_data_process.utils import (
     ProcessSummary,
     check_roles,
     check_reasoning_content,
-    extract_instance_id,
+    extract_instance_id_from_config,
     filter_instance_ids_by_repo,
     get_resolved_instances_from_job_dir,
     load_exclusion_patterns,
@@ -110,7 +110,7 @@ def collect_im_data(
         if max_instances is not None and kept_folder_count >= max_instances:
             break
 
-        instance_id = extract_instance_id(folder_name)
+        instance_id = extract_instance_id_from_config(job_dir, folder_name)
         try:
             converted_records, role_filtered, reasoning_filtered = process_one_instance(
                 folder_name, job_dir
@@ -141,11 +141,14 @@ def main() -> None:
 
     exclusion_patterns = load_exclusion_patterns(args.exclude_repos_file)
     if exclusion_patterns:
-        instance_ids = [extract_instance_id(f) for f in resolved_folders]
+        instance_ids = [extract_instance_id_from_config(job_dir, f) for f in resolved_folders]
         kept_ids = set(filter_instance_ids_by_repo(
             instance_ids, exclusion_patterns, label="oc",
         ))
-        resolved_folders = [f for f in resolved_folders if extract_instance_id(f) in kept_ids]
+        resolved_folders = [
+            f for f in resolved_folders
+            if extract_instance_id_from_config(job_dir, f) in kept_ids
+        ]
 
     im_data, summary = collect_im_data(
         resolved_folders=resolved_folders,
