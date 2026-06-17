@@ -14,7 +14,8 @@ from swe_data_process.utils import (
     check_reasoning_content,
     extract_instance_id_from_config,
     filter_instance_ids_by_repo,
-    get_resolved_instances_from_job_dir,
+    get_instances_from_job_dir,
+    InstanceStatus,
     load_exclusion_patterns,
     save_jsonl,
     save_lf_json,
@@ -62,6 +63,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="最多成功转换多少条，默认不限制",
+    )
+    parser.add_argument(
+        "--instance-status",
+        choices=("resolved", "unresolved", "all"),
+        default="resolved",
+        help="选择处理 resolved、unresolved 或全部实例，默认 resolved",
     )
     parser.add_argument(
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
@@ -161,8 +168,10 @@ def convert_dataset(
     job_dir: Path,
     max_samples: int | None = None,
     exclusion_patterns: list | None = None,
+    instance_status: InstanceStatus = "resolved",
 ) -> list[dict[str, Any]]:
-    resolved_folders = get_resolved_instances_from_job_dir(job_dir)
+    resolved_folders = get_instances_from_job_dir(job_dir, instance_status)
+    print(f"Total {instance_status} instances: {len(resolved_folders)}")
     if exclusion_patterns:
         instance_ids = [extract_instance_id_from_config(job_dir, f) for f in resolved_folders]
         kept_ids = set(filter_instance_ids_by_repo(
@@ -270,6 +279,7 @@ def main() -> None:
         job_dir,
         max_samples=max_samples,
         exclusion_patterns=load_exclusion_patterns(args.exclude_repos_file),
+        instance_status=args.instance_status,
     )
 
     im_data = score_dataset(im_data, quiet=True)

@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Literal
 
 import numpy as np
 from tqdm import tqdm
@@ -850,20 +850,44 @@ def replace_system_model_name(
         first_message["content"] = content.replace(source_model, target_model)
 
 
-def get_resolved_instances_from_job_dir(job_dir: Path) -> list[str]:
-    """Read resolved (reward=1.0) folder names from job_dir/result.json.
+InstanceStatus = Literal["resolved", "unresolved", "all"]
+
+_INSTANCE_STATUS_REWARD_KEYS: dict[InstanceStatus, tuple[str, ...] | None] = {
+    "resolved": ("1.0",),
+    "unresolved": ("0.0",),
+    "all": None,
+}
+
+
+def get_instances_from_job_dir(
+    job_dir: Path,
+    instance_status: InstanceStatus = "resolved",
+) -> list[str]:
+    """Read selected folder names from job_dir/result.json.
 
     Returns folder names (with hash suffix, e.g. 'astropy__astropy-7606__nCRsfSp').
     Use extract_instance_id() to get the bare instance_id for tagging.
     """
+    reward_keys = _INSTANCE_STATUS_REWARD_KEYS[instance_status]
     result_json = job_dir / "result.json"
     with result_json.open("r", encoding="utf-8") as f:
         result = json.load(f)
     evals = result["stats"]["evals"]
-    resolved: list[str] = []
+    selected: list[str] = []
     for key in evals:
-        resolved.extend(evals[key]["reward_stats"]["reward"]["1.0"])
-    return resolved
+        rewards = evals[key]["reward_stats"]["reward"]
+        if reward_keys is None:
+            for folders in rewards.values():
+                selected.extend(folders)
+        else:
+            for reward_key in reward_keys:
+                selected.extend(rewards.get(reward_key, []))
+    return selected
+
+
+def get_resolved_instances_from_job_dir(job_dir: Path) -> list[str]:
+    """Read resolved (reward=1.0) folder names from job_dir/result.json."""
+    return get_instances_from_job_dir(job_dir, instance_status="resolved")
 
 
 def extract_instance_id(folder_name: str) -> str:
