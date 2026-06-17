@@ -57,7 +57,7 @@ Raw trajectories (per-scaffold format)
 
 - **`src/swe_data_process/`** — The Python package (installed via `pip install -e .`):
   - **`utils.py`** — Shared utilities used by all converters: JSON I/O (`load_json`), token statistics (`print_lf_token_stats`), role validation (`check_roles`), reasoning content validation (`check_reasoning_content`), IM-to-LF conversion (`convert_json_to_lf_format`), I/O helpers (`save_jsonl`, `save_lf_json`), instance filtering (`get_resolved_instances` reads Harbor result.json), **reference-repo exclusion** (`load_exclusion_patterns`, `build_repo_exclusion_patterns`, `filter_instance_ids_by_repo`, `filter_paths_by_repo`, etc.), **main/subagent detection** (`detect_agent_type`, `tag_instance_records`, `filter_by_score_bundled`), and **path constants** (`REPO_ROOT`, `EXCLUDED_REPOS_FILE`).
-  - **`rule_score.py`** — Rule-based trajectory quality scoring module (v5 framework). `score_dataset()` is auto-invoked by all converter scripts after IM generation. Scores are saved as `_score` field in both IM and LF output. For CC/OC datasets, only main agent records are scored; subagent records (`_agent_type == "subagent"`) get `_score: null`.
+  - **`rule_score.py`** — Rule-based trajectory quality scoring module (TQS V2 framework). `score_dataset()` is auto-invoked by all converter scripts after IM generation. Scores are saved as `_score` in both IM and LF output. TQS V2 uses fail-soft aggregation over the core `SUB`, `STP`, `TVR`, `FEC`, and `DPI` components, while still emitting diagnostic metrics such as `OEC`, `IAC`, `PED`, `PSN`, `TTE`, and `SCP`. For CC/OC datasets, only main agent records are scored; subagent records (`_agent_type == "subagent"`) get `_score: null`.
   - **`llm_score.py`** — LLM-as-judge trajectory quality scoring module (v2). Checklist-based evaluation using an LLM (5 categories / 15 checks, letters F-J). Complements rule-based scoring; results are merged into `_score` with `llm_` prefix.
   - **`llm_checklist_score.py`** — OctoBench-aligned dynamic checklist LLM scoring module. It generates per-instance binary checklist items from the user question, system prompt, and tool definitions, then scores the full trajectory and writes ISR/CSR-style results into `_score`.
   - **`llm_client.py`** — OpenAI-compatible LLM API client with retry, concurrency control, and token/cost tracking. Used by `llm_score.py` and `llm_checklist_score.py`.
@@ -67,8 +67,8 @@ Raw trajectories (per-scaffold format)
 
 - **`artifacts/`** — Generated data files:
   - `excluded_repos.txt` — Generated list of 64 `owner/repo` entries (one per line) from the reference datasets. Used by `--exclude-repos-file`.
-  - `cc_im.jsonl` — Scoring example: base IM output (Claude Code converter, before optional LLM scoring).
-  - `cc_im_rule_scored.jsonl` — Scoring example: after `rule_score.py` (auto-invoked by converter; adds `composite_score`, sub-indicator scores).
+  - `cc_im.jsonl` — Example IM output from the Claude Code converter, including auto-applied TQS V2 rule scores.
+  - `cc_im_rule_scored.jsonl` — Example after standalone `rule_score.py` (adds `composite_score`, TQS V2 component scores, and diagnostic scores).
   - `cc_im_llm_scored.jsonl` — Scoring example: after `llm_score.py` (adds `llm_composite_score`, `llm_detailed_results`, `llm_checklist_version`).
   - `cc_im_llm_checklist_scored.jsonl` — Scoring example: after `llm_checklist_score.py` (adds `llm_checklist_csr`, `llm_checklist_category_scores`, `llm_checklist_definition`).
 

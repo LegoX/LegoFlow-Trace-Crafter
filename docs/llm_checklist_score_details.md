@@ -195,9 +195,9 @@ python -m swe_data_process.llm_checklist_score --input ... --no-json-mode
 
 | 维度 | rule_score.py | llm_score.py | llm_checklist_score.py |
 |------|--------------|--------------|----------------------|
-| checklist | 无（规则匹配） | 固定 15 项（F-J） | 动态生成 15-35 项 |
+| checklist | 无（TQS V2 规则组件） | 固定 15 项（F-J） | 动态生成 15-35 项 |
 | 评分方式 | 确定性规则 | LLM 1-5 五级 | LLM 0/1 二值 |
-| 聚合指标 | 加权 composite | 归一化 composite | ISR + CSR |
+| 聚合指标 | fail-soft 加权 composite | 归一化 composite | ISR + CSR |
 | 指令来源感知 | 否 | 否 | 是（多来源分类） |
 | 速度 | 毫秒级 | 秒级（1 次 API） | 秒级（2 次 API） |
 | 成本 | 免费 | 按 token 计费 | 约 2× llm_score（两次调用） |

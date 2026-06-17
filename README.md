@@ -36,7 +36,7 @@ swe_data_process/
 │   └── swe_data_process/                # Python package (pip install -e .)
 │       ├── __init__.py
 │       ├── utils.py                     # Shared utilities (token stats, role validation, IM->LF conversion)
-│       ├── rule_score.py                # Rule-based trajectory quality scoring (v5, auto-invoked by converters)
+│       ├── rule_score.py                # Rule-based trajectory quality scoring (TQS V2, auto-invoked by converters)
 │       ├── llm_score.py                 # LLM-as-judge trajectory quality scoring (v2, optional)
 │       ├── llm_checklist_score.py       # OctoBench-aligned dynamic checklist LLM scoring (optional)
 │       ├── llm_client.py                # OpenAI-compatible LLM API client with retry and concurrency
@@ -56,13 +56,13 @@ swe_data_process/
 │           └── convert_terminus2_to_im.py    # Terminus2 -> IM (unified)
 ├── artifacts/
 │   ├── excluded_repos.txt                # Generated list of repos to exclude (from reference datasets)
-│   ├── cc_im.jsonl                       # Scoring example: base IM output (Claude Code)
-│   ├── cc_im_rule_scored.jsonl           # Scoring example: after rule_score.py
+│   ├── cc_im.jsonl                       # Example IM output with auto TQS V2 rule scores
+│   ├── cc_im_rule_scored.jsonl           # Example after standalone rule_score.py
 │   ├── cc_im_llm_scored.jsonl            # Scoring example: after llm_score.py
 │   └── cc_im_llm_checklist_scored.jsonl  # Scoring example: after llm_checklist_score.py
 ├── docs/
 │   ├── data_format_requirement_panguml_v2.md  # Data format specification
-│   ├── rule_score_details.md             # Rule-based scoring framework (v5) reference
+│   ├── rule_score_details.md             # Rule-based scoring framework (TQS V2) reference
 │   ├── llm_score_details.md              # LLM-as-judge scoring framework reference
 │   └── llm_checklist_score_details.md    # Checklist-based LLM scoring reference
 ├── tests/                            # Unit tests (pytest)
@@ -140,9 +140,9 @@ python -m swe_data_process.<subpackage>.convert_<scaffold>_to_im \
 
 ### Auto Scoring
 
-所有转换脚本在生成 IM 数据后会自动调用 `rule_score.py` 中的 `score_dataset()` 对每条轨迹打分（v5 quality scoring framework，5 组 10 个子指标）。
+所有转换脚本在生成 IM 数据后会自动调用 `rule_score.py` 中的 `score_dataset()` 对每条 main agent 轨迹打分。当前规则打分使用 TQS V2：以 fail-soft 加权方式聚合 `SUB`、`STP`、`TVR`、`FEC`、`DPI` 五个核心组件，并额外输出 `OEC`、`IAC`、`PED`、`PSN`、`TTE`、`SCP` 等诊断指标。
 
-打分公式：`Score = 0.20*Efficiency + 0.15*Style + 0.25*ToolMastery + 0.25*Completion + 0.15*Precision`
+打分公式：`composite_score = Σ(weight_i × transformed(component_i)) / Σ(weight_i)`，其中非零权重为 `SUB=0.33`、`STP=0.27`、`TVR=0.23`、`FEC=0.10`、`DPI=0.07`。subagent 记录会保留在输出中，但 `_score` 为 `null`。
 
 如需单独对已有 IM 文件打分：`python -m swe_data_process.rule_score --input <im.jsonl>`
 
