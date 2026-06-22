@@ -6,10 +6,12 @@ from pathlib import Path
 import pytest
 
 from swe_data_process.utils import (
+    ModelProcessingConfig,
     get_instances_from_job_dir,
     get_resolved_instances_from_job_dir,
     load_jsonl,
     print_lf_token_stats_from_texts,
+    replace_system_model_name,
     save_jsonl,
 )
 
@@ -152,3 +154,41 @@ class TestTokenStats:
         )
 
         assert stats["total_tokens"] == 5
+
+    def test_uses_configured_token_batch_size(self):
+        class RecordingTokenizer:
+            def __init__(self):
+                self.batches = []
+
+            def __call__(self, texts, **kwargs):
+                self.batches.append(list(texts))
+                return {"length": [len(text.split()) for text in texts]}
+
+        tokenizer = RecordingTokenizer()
+        stats = print_lf_token_stats_from_texts(
+            ["one", "two", "three"],
+            [1, 1, 1],
+            tokenizer=tokenizer,
+            model_config=ModelProcessingConfig(token_batch_size=2),
+        )
+
+        assert stats["total_tokens"] == 3
+        assert tokenizer.batches == [["one", "two"], ["three"]]
+
+
+class TestModelProcessingConfig:
+    def test_replace_system_model_name_uses_config(self):
+        messages = [
+            {"role": "system", "content": "Current model: GLM-5-FP8"},
+            {"role": "user", "content": "hi"},
+        ]
+
+        replace_system_model_name(
+            messages,
+            model_config=ModelProcessingConfig(
+                system_source_model="GLM-5-FP8",
+                system_target_model="Custom-Model",
+            ),
+        )
+
+        assert messages[0]["content"] == "Current model: Custom-Model"

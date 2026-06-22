@@ -16,6 +16,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 EXCLUDED_REPOS_FILE = REPO_ROOT / "artifacts" / "excluded_repos.txt"
 
 PANGUML_VERSION = "2.0.0"
+DEFAULT_TOKENIZER_NAME = "Qwen/Qwen3-8B"
+DEFAULT_SYSTEM_SOURCE_MODEL = "GLM-5-FP8"
+DEFAULT_SYSTEM_TARGET_MODEL = "Qwen3-8B"
+DEFAULT_TOKEN_BATCH_SIZE = 64
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _PANGUML_TOP_LEVEL_KEYS = frozenset({
     "version",
@@ -35,6 +39,44 @@ _PANGUML_COMPAT_UNIQUE_INFO_KEYS = (
     "_gen_params",
     "_usage",
 )
+
+
+@dataclass(frozen=True)
+class ModelProcessingConfig:
+    """Shared model/tokenizer settings used by conversion utilities."""
+
+    tokenizer_name: str = DEFAULT_TOKENIZER_NAME
+    system_source_model: str = DEFAULT_SYSTEM_SOURCE_MODEL
+    system_target_model: str = DEFAULT_SYSTEM_TARGET_MODEL
+    token_batch_size: int = DEFAULT_TOKEN_BATCH_SIZE
+
+
+DEFAULT_MODEL_PROCESSING_CONFIG = ModelProcessingConfig()
+
+
+def _resolve_model_processing_config(
+    model_config: ModelProcessingConfig | None = None,
+    *,
+    tokenizer_name: str | None = None,
+    source_model: str | None = None,
+    target_model: str | None = None,
+    token_batch_size: int | None = None,
+) -> ModelProcessingConfig:
+    base = model_config or DEFAULT_MODEL_PROCESSING_CONFIG
+    return ModelProcessingConfig(
+        tokenizer_name=tokenizer_name
+        if tokenizer_name is not None
+        else base.tokenizer_name,
+        system_source_model=source_model
+        if source_model is not None
+        else base.system_source_model,
+        system_target_model=target_model
+        if target_model is not None
+        else base.system_target_model,
+        token_batch_size=token_batch_size
+        if token_batch_size is not None
+        else base.token_batch_size,
+    )
 
 
 def is_im_record(record: Any) -> bool:
@@ -412,22 +454,26 @@ class ProcessSummary:
 def print_lf_token_stats_from_texts(
     texts_for_token_stats: list[str],
     n_turns: list[int],
-    token_batch_size: int = 64,
+    token_batch_size: int | None = None,
     tokenizer: Any = None,
     tokenizer_name: str | None = None,
+    model_config: ModelProcessingConfig | None = None,
 ) -> dict[str, Any]:
     if not texts_for_token_stats:
         print("No LF records for token statistics.")
         return {}
 
+    config = _resolve_model_processing_config(
+        model_config,
+        tokenizer_name=tokenizer_name,
+        token_batch_size=token_batch_size,
+    )
     if tokenizer is None:
-        if tokenizer_name is None:
-            raise ValueError("Either tokenizer or tokenizer_name must be provided.")
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
 
     token_lens: list[int] = []
-    for start in tqdm(range(0, len(texts_for_token_stats), token_batch_size), desc="Token stats"):
-        batch_texts = texts_for_token_stats[start:start + token_batch_size]
+    for start in tqdm(range(0, len(texts_for_token_stats), config.token_batch_size), desc="Token stats"):
+        batch_texts = texts_for_token_stats[start:start + config.token_batch_size]
         encoded = tokenizer(
             batch_texts,
             add_special_tokens=False,
@@ -437,8 +483,8 @@ def print_lf_token_stats_from_texts(
         )
         token_lens.extend(encoded['length'])
 
-    if tokenizer_name is not None:
-        print(f"Tokenizer: {tokenizer_name}")
+    if tokenizer_name is not None or model_config is not None:
+        print(f"Tokenizer: {config.tokenizer_name}")
     total_tokens = int(sum(token_lens))
     print(f"[token_lens]\nMax: {int(np.max(token_lens))}\nMin: {int(np.min(token_lens))}\nMean: {int(np.mean(token_lens))}\nTotal: {total_tokens}")
     print("num of token len larger than 128k: ", sum(length > 131072 for length in token_lens), "\n")
@@ -455,15 +501,21 @@ def print_lf_token_stats_from_texts(
 
 def print_lf_token_stats(
     lf_records: list[dict[str, Any]],
-    tokenizer_name: str = "Qwen/Qwen3.5-35B-A3B",
-    token_batch_size: int = 64,
+    tokenizer_name: str | None = None,
+    token_batch_size: int | None = None,
     stats_output_path: Path | None = None,
+    model_config: ModelProcessingConfig | None = None,
 ) -> dict[str, Any]:
     if not lf_records:
         print("No LF records for token statistics.")
         return {}
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    config = _resolve_model_processing_config(
+        model_config,
+        tokenizer_name=tokenizer_name,
+        token_batch_size=token_batch_size,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     texts_for_token_stats: list[str] = []
     n_turns: list[int] = []
 
@@ -479,9 +531,9 @@ def print_lf_token_stats(
     stats = print_lf_token_stats_from_texts(
         texts_for_token_stats,
         n_turns,
-        token_batch_size=token_batch_size,
+        token_batch_size=config.token_batch_size,
         tokenizer=tokenizer,
-        tokenizer_name=tokenizer_name,
+        tokenizer_name=config.tokenizer_name,
     )
 
     scores_list = []
@@ -594,15 +646,21 @@ def check_reasoning_content(
 
 def convert_json_to_lf_format(
     all_json_data: list[dict[str, Any]],
-    tokenizer_name: str = "Qwen/Qwen3.5-35B-A3B",
+    tokenizer_name: str | None = None,
     compute_token_stats: bool = True,
-    token_batch_size: int = 64,
+    token_batch_size: int | None = None,
+    model_config: ModelProcessingConfig | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not all_json_data:
         print("No records to convert; saving empty LF dataset.")
         return [], {}
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    config = _resolve_model_processing_config(
+        model_config,
+        tokenizer_name=tokenizer_name,
+        token_batch_size=token_batch_size,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     lf_all_json_data: list[dict[str, Any]] = []
     texts_for_token_stats: list[str] | None = [] if compute_token_stats else None
     n_turns: list[int] = []
@@ -667,8 +725,9 @@ def convert_json_to_lf_format(
         stats = print_lf_token_stats_from_texts(
             texts_for_token_stats,
             n_turns,
-            token_batch_size=token_batch_size,
+            token_batch_size=config.token_batch_size,
             tokenizer=tokenizer,
+            tokenizer_name=config.tokenizer_name,
         )
     else:
         print(f"[n_turn]\nMax: {int(np.max(n_turns))}\nMin: {int(np.min(n_turns))}\nMean: {int(np.mean(n_turns))}")
@@ -718,10 +777,21 @@ def load_jsonl(file_path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def save_lf_json(output_path: Path, records: list[dict[str, Any]]) -> None:
+def save_lf_json(
+    output_path: Path,
+    records: list[dict[str, Any]],
+    tokenizer_name: str | None = None,
+    token_batch_size: int | None = None,
+    model_config: ModelProcessingConfig | None = None,
+) -> None:
     """Convert IM records to LF format and save as JSON + stats sidecar."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    lf_all_json_data, stats = convert_json_to_lf_format(records)
+    lf_all_json_data, stats = convert_json_to_lf_format(
+        records,
+        tokenizer_name=tokenizer_name,
+        token_batch_size=token_batch_size,
+        model_config=model_config,
+    )
 
     # 工具调用错误率基于 IM 记录计算（此时 role="tool" 结果尚未被 LF 合并），
     # 局部导入避免 utils <-> rule_score 循环依赖。
@@ -834,20 +904,29 @@ def filter_by_score_bundled(
 
 def replace_system_model_name(
     messages: list[dict[str, Any]],
-    source_model: str = "GLM-5-FP8",
-    target_model: str = "Qwen3.5-35B-A3B",
+    source_model: str | None = None,
+    target_model: str | None = None,
+    model_config: ModelProcessingConfig | None = None,
 ) -> None:
     """Replace model name in the system message (first message) in-place."""
     if not messages:
         return
 
+    config = _resolve_model_processing_config(
+        model_config,
+        source_model=source_model,
+        target_model=target_model,
+    )
     first_message = messages[0]
     if first_message.get("role") != "system":
         return
 
     content = first_message.get("content")
     if isinstance(content, str):
-        first_message["content"] = content.replace(source_model, target_model)
+        first_message["content"] = content.replace(
+            config.system_source_model,
+            config.system_target_model,
+        )
 
 
 InstanceStatus = Literal["resolved", "unresolved", "all"]
