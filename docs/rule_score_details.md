@@ -79,9 +79,11 @@ TVR = 0.3 × has_test_write + 0.3 × has_test_run + 0.4 × late_test_success
 - `has_test_run`：是否运行测试命令
 - `late_test_success`：最后一次测试运行的 observation 没有错误为 1.0；测试失败但确实运行了测试为 0.3
 
-测试命令识别包括 `pytest`、`python -m unittest`、`go test`、`cargo test`、`mvn test`、`gradle test`、`jest`、`vitest`、`npm test`、`make test` 等。
+测试命令识别包括 `pytest`、`python -m unittest`、`go test`、`cargo test`、`mvn test`、`gradle test`、`jest`、`vitest`、`npm test`、`make test` 等（`python` / `python3` 两种写法均可）。
 
 测试文件识别包括 Python、Go、Rust、Java、JS/TS 常见测试命名模式，例如 `test_*.py`、`*_test.py`、`*_test.go`、`tests/*.rs`、`*Test.java`、`*.test.ts`、`*.spec.tsx`。
+
+此外 TVR **额外**识别 SWE-agent 常用的非正式验证习语：`python -c` 内联自测、以及 `reproduce`/`repro`/`verify`/`smoke`/`check` 命名的脚本（如 `python reproduce_bug.py`）。这些信号**仅用于 TVR**，不进入错误抑制路径——因此一个真正报错的 `python -c` traceback 不会被当成“测试输出”而在 DPI / 错误率中被吞掉。
 
 ### FEC: File Edit Concentration
 
@@ -159,23 +161,68 @@ FEC = 1 - clip((mean_edits_per_file - 1) / 4, 0, 1)
 
 ## 错误检测
 
-错误检测分为硬错误和软错误。
+错误检测分为两个层次：**显式工具失败标记**和**命令输出错误信号**。关键区别在于后者只对“执行类”工具的 observation 生效，避免把文件查看/编辑工具返回的源码内容误判为工具调用错误（历史上工具调用错误率假阳性的主因）。
 
-硬错误在任何上下文中都算工具错误：
+### 1. 显式工具失败标记（对所有工具类型生效）
+
+由脚手架/运行时注入，独立于工具输出内容，因此命中即视为工具调用错误，与工具是否为执行类无关：
+
+- `<tool_use_error>`
+- `The arguments provided to the tool are invalid`
+- `[An error occurred during execution.]`（OpenHands SDK 工具执行失败）
+- `Error validating args ... for tool`（OpenHands SDK 参数校验失败）
+- `Error executing tool`（OpenHands SDK 工具执行异常）
+- 行首 `ERROR:`（OpenHands `str_replace_editor` 失败块）
+- `No replacement was performed`
+- `parameter is required for '<cmd>' command`
+- `` Invalid `<param>` parameter ``
+
+这些标记均为起始锚定或高度特异，源码内容不会误命中。
+
+### 2. 命令输出错误信号（仅对执行类工具生效）
+
+只有执行类工具（bash/terminal/ipython 等）的 observation 内容才是命令的真实 stdout/stderr，此时才扫描下列模式；对文件查看/编辑/搜索类工具一律跳过。
+
+硬错误（执行类工具，任何上下文）：
 
 - `command not found`
 - `Permission denied`
-- 非零退出码
+- 非零退出码（`exit code: N`）
 - `returned non-zero exit status`
-- `<tool_use_error>`
-- `The arguments provided to the tool are invalid`
 
-软错误只在非测试输出上下文中匹配，避免把正常的测试失败误判为工具调用失败：
+软错误（执行类工具，且仅在非测试输出上下文中匹配，避免把正常的测试失败误判为工具调用失败）：
 
 - Python traceback
 - 常见异常名，例如 `TypeError`、`ImportError`、`FileNotFoundError`
 - `No such file or directory`
 - `FAILED`
+
+### 执行类 / 非执行类工具判别
+
+工具名常被各 SWE 数据源重命名（`shell_exec`/`run_command`/`code_editor`/...），因此判别**以工具调用参数为准**，工具名单仅作回退：
+
+- `command` 取编辑器子命令（`view`/`create`/`str_replace`/`insert`/`undo_edit`），或携带编辑器专属参数（`old_str`/`new_str`/`file_text`/`view_range`/`insert_line`）→ 文件查看/编辑工具，**非执行类**
+- 否则若携带非空 shell 命令参数（`command`/`cmd`/`keystrokes`）→ **执行类**
+- 都不满足时回退到执行类工具名单（`bash`/`terminal`/`execute_bash`/`shell`/`ipython`/`python` 等）
+
+Terminus2 的 observation 全部是终端命令输出，按执行类处理。
+
+## 工具名归一化（预处理）
+
+部分数据集（如工具改名增广的 OpenHands 轨迹）把标准工具改成了任意同义名：`execute_bash` → `shell_exec`、`str_replace_editor` → `edit_file`、`finish` → `end_task`、`think` → `consider`、`task_tracker` → `planning` 等。这些工具的**参数 schema 与标准工具完全一致，只是名字变了**。
+
+`score_record()` 在打分前先调用 `_canonicalize_record()`，按工具声明的参数签名（`_infer_canonical_name`）把改名工具归一回标准名：
+
+| 参数特征 | 归一为 |
+|----------|--------|
+| 含 `task_completed` | `finish` |
+| 仅有 `thought`（无 `command`/`path`） | `think` |
+| 含 `task_list` | `task_tracker` |
+| 含 `old_str`/`new_str`/`file_text`/`view_range` | `str_replace_editor` |
+| 含 `command` 且带 `is_input`/`timeout` | `execute_bash` |
+| 含 `command` + `path` 但无 shell 特征 | `str_replace_editor` |
+
+归一后 `detect_scaffold()` 与所有下游指标（SUB/TVR/DPI/SCP/FEC...）即可正常工作，无需改动各 helper。该步骤返回新记录、不修改入参，且尽量浅拷贝以避免复制大字段。
 
 ## 脚手架自动检测
 
