@@ -93,13 +93,32 @@ _CC_OC_TOOL_NAMES_LOWER = frozenset({
 
 # --- Error detection ---
 _ERROR_SCAN_LIMIT = 3000
+
+# 显式工具失败标记：由脚手架/运行时注入，独立于工具输出内容，因此对所有工具类型都
+# 可靠。文件查看/编辑工具返回的源码内容不会把这些 wrapper 文本当作数据出现。
+_TOOL_ERROR_MARKERS: list[re.Pattern[str]] = [
+    re.compile(r"<tool_use_error>"),
+    re.compile(r"The arguments provided to the tool are invalid"),
+    re.compile(r"\[An error occurred during execution\.\]"),  # OpenHands SDK 工具执行失败
+    re.compile(r"Error validating args\b.*\bfor tool\b"),      # OpenHands SDK 参数校验失败
+    re.compile(r"Error executing tool\b"),                     # OpenHands SDK 工具执行异常
+    # 非 SDK OpenHands 的 str_replace_editor 失败：内容以 "ERROR:" 块开头，或带下列
+    # OpenHands 特有的编辑失败措辞。均为起始锚定/高度特异，源码内容不会误命中。
+    re.compile(r"^\s*ERROR:"),
+    re.compile(r"No replacement was performed"),
+    re.compile(r"parameter is required for ['\"]?\w+['\"]? command"),
+    re.compile(r"Invalid `[^`]+` parameter"),
+]
+
+# 命令输出错误信号：仅对“执行类”工具（bash/terminal/ipython）的 observation 有意义，
+# 因为此时 content 才是命令的 stdout/stderr。若对文件查看/编辑/搜索类工具套用，会把
+# 返回的源码内容（其中合法地出现 except/raise/AssertionError、FAILED、exit code 等
+# token）误判成工具调用错误 —— 这是历史上工具调用错误率假阳性的主因。
 _ERROR_PATTERNS_HARD: list[re.Pattern[str]] = [
     re.compile(r"command not found"),
     re.compile(r"Permission denied"),
     re.compile(r"exit code[:\s]+[1-9]", re.IGNORECASE),
     re.compile(r"returned non-zero exit status"),
-    re.compile(r"<tool_use_error>"),
-    re.compile(r"The arguments provided to the tool are invalid"),
 ]
 _ERROR_PATTERNS_SOFT: list[re.Pattern[str]] = [
     re.compile(r"Traceback \(most recent call last\)"),
@@ -120,13 +139,30 @@ _MULTI_EDITOR_TOOL_NAMES = frozenset({"file_editor", "str_replace_editor"})
 _EDITOR_WRITE_COMMANDS = frozenset({"str_replace", "create", "insert"})
 _EDIT_TOOL_NAMES = _PURE_EDIT_TOOL_NAMES | _MULTI_EDITOR_TOOL_NAMES
 _BASH_TOOL_NAMES = frozenset({"bash", "terminal", "execute_bash"})
+# 执行类工具：其 observation 内容是命令/代码的真实输出，可套用命令输出错误模式
+# （_ERROR_PATTERNS_HARD/SOFT）。其余工具（文件查看/编辑/搜索等）仅依据显式工具
+# 失败标记（_TOOL_ERROR_MARKERS）判定，避免把返回的源码内容误判为工具调用错误。
+#
+# 工具名常被各 SWE 数据源重命名（shell_exec/run_command/exec_cmd/code_editor/...），
+# 因此执行/非执行的判别**以工具调用参数为准**（见 _tool_call_is_execution），下面的
+# 名单只作为参数缺失/命令为空时的快速回退。
+_EXECUTION_TOOL_NAMES = frozenset({
+    "bash", "terminal", "execute_bash", "shell", "cmd",
+    "execute_ipython_cell", "run_ipython", "ipython", "python", "run_python",
+})
+# 编辑器子命令：command 取这些值即文件编辑/查看工具（非执行类）。
+_EDITOR_SUBCOMMANDS = frozenset({"view", "create", "str_replace", "insert", "undo_edit"})
+# 编辑器专属参数键：bash 类工具从不携带，用作非执行类的辅助判据。
+_EDITOR_ONLY_ARG_KEYS = ("old_str", "new_str", "file_text", "view_range", "insert_line")
+# 携带 shell 命令的参数键。
+_SHELL_CMD_ARG_KEYS = ("command", "cmd", "keystrokes")
 _FILE_PATH_KEYS = ("file_path", "filePath", "path")
 
 # --- Test detection ---
 _TEST_RUN_RE = re.compile(
     r"\b(?:"
-    r"pytest|py\.test|python\s+-m\s+pytest|python\s+-m\s+unittest"
-    r"|unittest|python\s+test_|nosetests"
+    r"pytest|py\.test|python3?\s+-m\s+pytest|python3?\s+-m\s+unittest"
+    r"|unittest|python3?\s+test_|nosetests"
     r"|go\s+test|cargo\s+test|ctest|gtest_filter"
     r"|mvn\s+(?:test|verify|surefire)|gradle\s+test|gradlew\s+test"
     r"|jest|mocha|vitest|npx\s+jest|npx\s+vitest|npx\s+mocha"
@@ -232,6 +268,32 @@ def _parse_tool_call(tc: Any) -> tuple[str, dict]:
     if not isinstance(args, dict):
         args = {}
     return name, args
+
+
+def _tool_call_is_execution(name_lower: str, args: dict) -> bool:
+    """判断一个 tool_call 是否为“执行类”（运行 shell 命令 / 代码）。
+
+    各数据源常把工具改名（shell_exec / run_command / exec_cmd / code_editor /
+    source_editor / ...），因此**以参数特征为准**、工具名只作回退：
+
+    - command 取值为编辑器子命令（view/create/str_replace/insert/undo_edit），或
+      携带编辑器专属参数（old_str/new_str/file_text/view_range/insert_line）→ 文件
+      查看/编辑工具，非执行类。
+    - 否则若携带非空的 shell 命令参数（command/cmd/keystrokes）→ 执行类。
+    - 都不满足时回退到执行类工具名单（处理如 execute_bash 传空 command 的情况）。
+    """
+    if not isinstance(args, dict):
+        return name_lower in _EXECUTION_TOOL_NAMES
+    cmd = args.get("command")
+    if isinstance(cmd, str) and cmd in _EDITOR_SUBCOMMANDS:
+        return False
+    if any(k in args for k in _EDITOR_ONLY_ARG_KEYS):
+        return False
+    for key in _SHELL_CMD_ARG_KEYS:
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            return True
+    return name_lower in _EXECUTION_TOOL_NAMES
 
 
 def _normalize_path(p: str) -> str:
@@ -372,6 +434,7 @@ def _extract_observations(
                     "msg_idx": idx,
                     "prev_assistant_idx": idx - 1,
                     "tool_call_position": None,
+                    "tool_name": None,  # Terminus2 全部为终端命令输出，按执行类处理
                 })
     else:
         _position_counter: dict[int, int] = {}
@@ -384,14 +447,22 @@ def _extract_observations(
                     prev_assistant_idx = j
                     break
             pos = 0
+            tool_name = ""
+            is_execution = False
             if prev_assistant_idx is not None:
                 pos = _position_counter.get(prev_assistant_idx, 0)
                 _position_counter[prev_assistant_idx] = pos + 1
+                tcs = messages[prev_assistant_idx].get("tool_calls", []) or []
+                if pos < len(tcs):
+                    tool_name, tool_args = _parse_tool_call(tcs[pos])
+                    is_execution = _tool_call_is_execution(tool_name, tool_args)
             observations.append({
                 "content": msg.get("content", ""),
                 "msg_idx": idx,
                 "prev_assistant_idx": prev_assistant_idx,
                 "tool_call_position": pos,
+                "tool_name": tool_name,
+                "is_execution": is_execution,
             })
 
     return observations
@@ -401,11 +472,28 @@ def _extract_observations(
 # Error detection
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _is_error_result(content: str, is_test_output: bool = False) -> bool:
-    """检测 observation 是否包含错误信息。"""
+def _is_error_result(content: str, is_test_output: bool = False, is_execution: bool = True) -> bool:
+    """检测 observation 是否包含错误信息。
+
+    判定分两层：
+
+    1. 显式工具失败标记（_TOOL_ERROR_MARKERS）：由脚手架注入，对所有工具类型生效。
+    2. 命令输出错误模式（_ERROR_PATTERNS_HARD/SOFT）：仅当 is_execution=True
+       （bash/terminal/ipython 等执行类工具）时才扫描。非执行类工具（文件查看、
+       编辑、搜索等）返回的是源码/文件数据而非命令输出，套用这些模式会把源码里
+       合法出现的 except/raise/FAILED 等 token 误判成工具调用错误。
+
+    is_execution 默认 True 以保持旧调用点行为；逐 observation 的判定（_is_obs_error /
+    _count_tool_call_errors）会按产生该 observation 的工具传入正确的值。
+    """
     if not content:
         return False
     text = content[:_ERROR_SCAN_LIMIT]
+    for pat in _TOOL_ERROR_MARKERS:
+        if pat.search(text):
+            return True
+    if not is_execution:
+        return False
     for pat in _ERROR_PATTERNS_HARD:
         if pat.search(text):
             return True
@@ -461,10 +549,23 @@ def _resolve_is_test_for_obs(obs: dict, messages: list[dict], scaffold: str, _te
     return flags[pos] if pos < len(flags) else False
 
 
+def _obs_is_execution(obs: dict, scaffold: str) -> bool:
+    """该 observation 是否由执行类工具（命令/代码执行）产生。
+
+    Terminus2 的 observation 全部是终端命令输出，按执行类处理；其它脚手架在
+    _extract_observations 中已按工具调用参数判定并写入 obs["is_execution"]
+    （见 _tool_call_is_execution，对工具改名鲁棒）。
+    """
+    if scaffold == "terminus2":
+        return True
+    return bool(obs.get("is_execution"))
+
+
 def _is_obs_error(obs: dict, messages: list[dict], scaffold: str, _test_flags_cache: dict) -> bool:
-    """判断 observation 是否为错误（排除测试输出误判）。"""
+    """判断 observation 是否为错误（区分执行类/非执行类工具，排除测试输出误判）。"""
     is_test = _resolve_is_test_for_obs(obs, messages, scaffold, _test_flags_cache)
-    return _is_error_result(obs.get("content", ""), is_test_output=is_test)
+    is_exec = _obs_is_execution(obs, scaffold)
+    return _is_error_result(obs.get("content", ""), is_test_output=is_test, is_execution=is_exec)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1136,6 +1237,35 @@ _TEST_FILE_RE = re.compile(
 )
 
 
+# --- TVR-only verification idioms ---
+# SWE-agent 轨迹常用「写 reproduce/verify 脚本 + python -c 内联自测」来验证，
+# 而非正式 test runner。这些信号只用于 TVR，不进入错误抑制路径（_TEST_RUN_RE），
+# 以免一个真正报错的 `python -c` traceback 被当成测试输出而在 DPI/错误率中被吞掉。
+_TVR_VERIFY_RE = re.compile(
+    r"\bpython3?\s+-c\b"                                              # 内联执行自测
+    r"|\bpython3?\s+(?:-\S+\s+)*\S*"
+    r"(?:reproduce|repro|verify|smoke|check)\S*\.py\b"                # 跑 reproduce/verify 脚本
+    r"|\bpython3?\s+(?:-\S+\s+)*(?:\S*/)?(?:test_\S+|\S+_test)\.py\b",  # 直接跑 test_*.py / *_test.py
+    re.IGNORECASE,
+)
+_TVR_REPRO_FILE_RE = re.compile(
+    r"(?:^|/)\S*(?:reproduce|repro|verify|smoke)\S*\.py$",
+    re.IGNORECASE,
+)
+
+
+def _is_test_run_cmd(cmd: str) -> bool:
+    """TVR 口径的测试执行判定：正式 runner 或 reproduce/inline 自测。"""
+    return bool(_TEST_RUN_RE.search(cmd) or _TVR_VERIFY_RE.search(cmd))
+
+
+def _is_test_file_path(path: str) -> bool:
+    """TVR 口径的测试文件判定：正式测试文件或 reproduce/verify 脚本。"""
+    if not path:
+        return False
+    return bool(_TEST_FILE_RE.search(path) or _TVR_REPRO_FILE_RE.search(path))
+
+
 def _compute_tvr(messages: list[dict], scaffold: str) -> float:
     """测试验证: 综合测试写入、执行次数和最终测试通过信号。
 
@@ -1157,7 +1287,7 @@ def _compute_tvr(messages: list[dict], scaffold: str) -> float:
                 if not isinstance(cmd, dict):
                     continue
                 ks = cmd.get("keystrokes", "")
-                if _TEST_RUN_RE.search(ks):
+                if _is_test_run_cmd(ks):
                     test_run_count += 1
                     # Find next user msg as observation
                     for j in range(idx + 1, len(messages)):
@@ -1165,18 +1295,18 @@ def _compute_tvr(messages: list[dict], scaffold: str) -> float:
                             last_test_obs_idx = j
                             break
                 for edited_path in _extract_bash_edit_paths(ks):
-                    if _TEST_FILE_RE.search(edited_path):
+                    if _is_test_file_path(edited_path):
                         has_test_write = True
         else:
             for tc_idx, tc in enumerate(msg.get("tool_calls", []) or []):
                 name_lower, args = _parse_tool_call(tc)
                 if _is_write_operation(name_lower, args):
                     path = _get_file_path(args)
-                    if _TEST_FILE_RE.search(path):
+                    if _is_test_file_path(path):
                         has_test_write = True
                 if name_lower in _BASH_TOOL_NAMES:
                     cmd = args.get("command", "")
-                    if _TEST_RUN_RE.search(cmd):
+                    if _is_test_run_cmd(cmd):
                         test_run_count += 1
                         # Find corresponding tool response
                         tool_count = 0
@@ -1274,6 +1404,117 @@ def _aggregate_tqs(components: dict[str, float | None]) -> float:
     return raw
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Tool-name canonicalization
+# ═══════════════════════════════════════════════════════════════════════════
+# 部分数据集（如工具改名增广的 OpenHands 轨迹）把 execute_bash/str_replace_editor/
+# finish/think/task_tracker 改成了任意同义名（shell_exec, edit_file, end_task,
+# consider, planning ...）。这些工具的「参数 schema」与标准工具完全一致，只是名字变了。
+# 打分逻辑大量依赖工具名常量，因此先按参数签名把工具名归一回标准名，scaffold 检测与
+# 所有下游指标（SUB/TVR/DPI/SCP/FEC...）即可正常工作，无需改动各 helper。
+
+# 标准名（下游常量已识别这些名字）
+_CANON_BASH = "execute_bash"
+_CANON_EDITOR = "str_replace_editor"
+_CANON_FINISH = "finish"
+_CANON_THINK = "think"
+_CANON_TRACKER = "task_tracker"
+
+# 已经是标准/已知工具的名字，无需归一
+_ALREADY_CANONICAL = (
+    _BASH_TOOL_NAMES | _MULTI_EDITOR_TOOL_NAMES | _PURE_EDIT_TOOL_NAMES
+    | {_CANON_FINISH, _CANON_THINK, _CANON_TRACKER}
+)
+
+
+def _infer_canonical_name(name: str, params: set[str]) -> str | None:
+    """按工具声明的参数签名推断标准名；无法判定或已是标准名时返回 None。"""
+    if name.lower() in _ALREADY_CANONICAL:
+        return None
+    # finish: 带 task_completed 的「结束任务」工具
+    if "task_completed" in params:
+        return _CANON_FINISH
+    # think: 仅有 thought 字段的思考工具
+    if "thought" in params and "command" not in params and "path" not in params:
+        return _CANON_THINK
+    # task_tracker: command + task_list 的待办管理工具
+    if "task_list" in params:
+        return _CANON_TRACKER
+    # editor: str_replace_editor 风格（command + path + old_str/file_text/view_range）
+    if {"old_str", "new_str", "file_text", "view_range"} & params:
+        return _CANON_EDITOR
+    # bash: command + is_input/timeout 的 shell 执行工具
+    if "command" in params and ("is_input" in params or "timeout" in params):
+        return _CANON_BASH
+    # editor fallback: command + path 但无 shell 特征
+    if "command" in params and "path" in params:
+        return _CANON_EDITOR
+    return None
+
+
+def _canonicalize_record(record: dict[str, Any]) -> dict[str, Any]:
+    """把改名工具归一回标准名，返回新记录（不修改入参，且尽量浅拷贝避免复制大字段）。"""
+    tools = record.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return record
+
+    name_map: dict[str, str] = {}
+    for t in tools:
+        fn = t.get("function", {}) if isinstance(t, dict) else {}
+        nm = fn.get("name")
+        if not nm:
+            continue
+        params = set(((fn.get("parameters") or {}).get("properties") or {}).keys())
+        canon = _infer_canonical_name(nm, params)
+        if canon and canon != nm:
+            name_map[nm] = canon
+
+    if not name_map:
+        return record
+
+    new_messages = []
+    for m in record.get("messages", []):
+        tcs = m.get("tool_calls")
+        if m.get("role") == "assistant" and tcs:
+            rebuilt = []
+            changed = False
+            for tc in tcs:
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                old = fn.get("name")
+                if old in name_map:
+                    new_fn = dict(fn)
+                    new_fn["name"] = name_map[old]
+                    new_tc = dict(tc)
+                    new_tc["function"] = new_fn
+                    rebuilt.append(new_tc)
+                    changed = True
+                else:
+                    rebuilt.append(tc)
+            if changed:
+                m2 = dict(m)
+                m2["tool_calls"] = rebuilt
+                new_messages.append(m2)
+                continue
+        new_messages.append(m)
+
+    new_tools = []
+    for t in tools:
+        fn = t.get("function", {}) if isinstance(t, dict) else {}
+        if fn.get("name") in name_map:
+            new_fn = dict(fn)
+            new_fn["name"] = name_map[fn["name"]]
+            new_t = dict(t)
+            new_t["function"] = new_fn
+            new_tools.append(new_t)
+        else:
+            new_tools.append(t)
+
+    new_record = dict(record)
+    new_record["messages"] = new_messages
+    new_record["tools"] = new_tools
+    return new_record
+
+
 def score_record(
     record: dict[str, Any],
     median_steps: float | str | None = None,
@@ -1286,6 +1527,7 @@ def score_record(
     """
     if scaffold_override is None and isinstance(median_steps, str):
         scaffold_override = median_steps
+    record = _canonicalize_record(record)
     messages = record.get("messages", [])
     scaffold = scaffold_override or detect_scaffold(record)
     actions = _extract_actions(messages, scaffold)
@@ -1455,7 +1697,10 @@ def _count_tool_call_errors(
 
     错误判定复用 _is_error_result，并沿用 C1 的 test-output 处理：测试命令产生的
     observation 只匹配明确执行错误（Tier 1），避免 pytest 预期失败被误判为工具
-    调用错误。
+    调用错误。此外按产生 observation 的工具区分执行类/非执行类（见
+    _obs_is_execution）：文件查看/编辑/搜索类工具返回的是源码/文件数据而非命令
+    输出，仅依据显式工具失败标记判定，避免源码里的 except/raise/FAILED 等 token
+    被误判为工具调用错误（历史假阳性主因）。
     """
     messages = record.get("messages", []) or []
     observations = _extract_observations(messages, scaffold)
@@ -1478,7 +1723,8 @@ def _count_tool_call_errors(
                     if cmds:
                         n_cmds = len(cmds)
             total += n_cmds
-            if _is_error_result(obs.get("content", ""), is_test_output=is_test):
+            # Terminus2 的 observation 都是终端命令输出 → 执行类
+            if _is_error_result(obs.get("content", ""), is_test_output=is_test, is_execution=True):
                 errors += 1
         return total, errors
 
@@ -1494,8 +1740,9 @@ def _count_tool_call_errors(
             flags = _test_flags_cache[prev_idx]
             pos = obs.get("tool_call_position", 0)
             is_test = flags[pos] if pos < len(flags) else False
+        is_exec = _obs_is_execution(obs, scaffold)
         total += 1
-        if _is_error_result(obs.get("content", ""), is_test_output=is_test):
+        if _is_error_result(obs.get("content", ""), is_test_output=is_test, is_execution=is_exec):
             errors += 1
     return total, errors
 
