@@ -627,11 +627,28 @@ def check_reasoning_content(
     messages: list[dict[str, Any]],
     think_mode: str,
     pseudo_turns: int | None,
+    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_content_ratio_threshold: float = 0.5,
 ) -> bool:
     if think_mode == "fast":
         return True
 
     check_turns = pseudo_turns if pseudo_turns else 0
+    if reasoning_check_mode == "adaptive":
+        assistant_count = 0
+        reasoning_count = 0
+        for idx in range(check_turns, len(messages)):
+            msg = messages[idx]
+            if msg.get("role") != "assistant":
+                continue
+            assistant_count += 1
+            if msg.get("reasoning_content"):
+                reasoning_count += 1
+
+        if assistant_count == 0:
+            return True
+        return reasoning_count / assistant_count >= reasoning_content_ratio_threshold
+
     for idx in range(check_turns, len(messages)):
         msg = messages[idx]
         if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
