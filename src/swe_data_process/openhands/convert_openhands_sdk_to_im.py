@@ -1,7 +1,7 @@
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from tqdm import tqdm
 
@@ -66,6 +66,18 @@ def parse_args() -> argparse.Namespace:
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
         default=EXCLUDED_REPOS_FILE,
         help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
+    )
+    parser.add_argument(
+        "--reasoning-check-mode",
+        choices=("strict", "adaptive"),
+        default="strict",
+        help="slow 轨迹 reasoning_content 过滤模式",
+    )
+    parser.add_argument(
+        "--reasoning-content-ratio-threshold",
+        type=float,
+        default=0.5,
+        help="adaptive 模式下 assistant 轮次包含 reasoning_content 的最低比例",
     )
     return parser.parse_args()
 
@@ -159,6 +171,8 @@ def convert_dataset(
     job_dir: Path,
     max_samples: int | None = None,
     exclusion_patterns: list | None = None,
+    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_content_ratio_threshold: float = 0.5,
 ) -> list[dict[str, Any]]:
     resolved_folders = get_resolved_instances_from_job_dir(job_dir)
     if exclusion_patterns:
@@ -214,7 +228,13 @@ def convert_dataset(
             skipped_invalid += 1
             continue
 
-        if not check_reasoning_content(messages, think_mode=think_mode, pseudo_turns=None):
+        if not check_reasoning_content(
+            messages,
+            think_mode=think_mode,
+            pseudo_turns=None,
+            reasoning_check_mode=reasoning_check_mode,
+            reasoning_content_ratio_threshold=reasoning_content_ratio_threshold,
+        ):
             skipped_invalid += 1
             print(f"Instance {instance_id} failed reasoning content check.")
             continue
@@ -261,6 +281,8 @@ def main() -> None:
         job_dir,
         max_samples=max_samples,
         exclusion_patterns=load_exclusion_patterns(args.exclude_repos_file),
+        reasoning_check_mode=args.reasoning_check_mode,
+        reasoning_content_ratio_threshold=args.reasoning_content_ratio_threshold,
     )
 
     im_data = score_dataset(im_data, quiet=True)

@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from tqdm import tqdm
 
@@ -48,11 +48,28 @@ def parse_args() -> argparse.Namespace:
         default=EXCLUDED_REPOS_FILE,
         help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
     )
+    parser.add_argument(
+        "--reasoning-check-mode",
+        choices=("strict", "adaptive"),
+        default="strict",
+        help="slow 轨迹 reasoning_content 过滤模式",
+    )
+    parser.add_argument(
+        "--reasoning-content-ratio-threshold",
+        type=float,
+        default=0.5,
+        help="adaptive 模式下 assistant 轮次包含 reasoning_content 的最低比例",
+    )
     parser.add_argument("--quiet", action="store_true", help="关闭详细日志")
     return parser.parse_args()
 
 
-def process_one_instance(folder_name: str, job_dir: Path) -> tuple[list[dict], int, int]:
+def process_one_instance(
+    folder_name: str,
+    job_dir: Path,
+    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_content_ratio_threshold: float = 0.5,
+) -> tuple[list[dict], int, int]:
     traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
     records = deduplicate_trajectories(traj_file)
 
@@ -71,6 +88,8 @@ def process_one_instance(folder_name: str, job_dir: Path) -> tuple[list[dict], i
             converted_record["messages"],
             think_mode=converted_record["think_mode"],
             pseudo_turns=converted_record["pseudo_turns"],
+            reasoning_check_mode=reasoning_check_mode,
+            reasoning_content_ratio_threshold=reasoning_content_ratio_threshold,
         ):
             reasoning_filtered += 1
             continue
@@ -85,6 +104,8 @@ def collect_im_data(
     job_dir: Path,
     max_instances: int | None,
     quiet: bool,
+    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_content_ratio_threshold: float = 0.5,
 ) -> tuple[list[dict[str, Any]], ProcessSummary]:
     im_data: list[dict[str, Any]] = []
     summary = ProcessSummary()
@@ -97,7 +118,10 @@ def collect_im_data(
         instance_id = extract_instance_id(folder_name)
         try:
             converted_records, role_filtered, reasoning_filtered = process_one_instance(
-                folder_name, job_dir
+                folder_name,
+                job_dir,
+                reasoning_check_mode=reasoning_check_mode,
+                reasoning_content_ratio_threshold=reasoning_content_ratio_threshold,
             )
             summary.role_filtered += role_filtered
             summary.reasoning_filtered += reasoning_filtered
@@ -136,6 +160,8 @@ def main() -> None:
         job_dir=job_dir,
         max_instances=args.max_instances,
         quiet=args.quiet,
+        reasoning_check_mode=args.reasoning_check_mode,
+        reasoning_content_ratio_threshold=args.reasoning_content_ratio_threshold,
     )
 
     im_data = score_dataset(im_data, quiet=True)

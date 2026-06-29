@@ -37,7 +37,7 @@ The produced IM records match litellm-converted IM in all respects except:
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from tqdm import tqdm
 
@@ -144,6 +144,18 @@ def parse_args() -> argparse.Namespace:
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
         default=EXCLUDED_REPOS_FILE,
         help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
+    )
+    parser.add_argument(
+        "--reasoning-check-mode",
+        choices=("strict", "adaptive"),
+        default="strict",
+        help="slow 轨迹 reasoning_content 过滤模式",
+    )
+    parser.add_argument(
+        "--reasoning-content-ratio-threshold",
+        type=float,
+        default=0.5,
+        help="adaptive 模式下 assistant 轮次包含 reasoning_content 的最低比例",
     )
     return parser.parse_args()
 
@@ -311,6 +323,8 @@ def process_one_session(
     normalized_tools: list[dict[str, Any]],
     tool_properties_order: dict[str, list[str]],
     source_dir: Path,
+    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_content_ratio_threshold: float = 0.5,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """
     Convert one CC session file → list of IM records (with instance tagging).
@@ -346,6 +360,8 @@ def process_one_session(
         messages,
         think_mode=think_mode,
         pseudo_turns=None,
+        reasoning_check_mode=reasoning_check_mode,
+        reasoning_content_ratio_threshold=reasoning_content_ratio_threshold,
     ):
         reasoning_filtered += 1
         return [], role_filtered, reasoning_filtered
@@ -369,6 +385,8 @@ def collect_im_data(
     source_dir: Path,
     max_instances: int | None,
     quiet: bool,
+    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_content_ratio_threshold: float = 0.5,
 ) -> tuple[list[dict[str, Any]], ProcessSummary]:
     im_data: list[dict[str, Any]] = []
     summary = ProcessSummary()
@@ -385,6 +403,8 @@ def collect_im_data(
                 normalized_tools,
                 tool_properties_order,
                 source_dir,
+                reasoning_check_mode=reasoning_check_mode,
+                reasoning_content_ratio_threshold=reasoning_content_ratio_threshold,
             )
             summary.role_filtered += role_f
             summary.reasoning_filtered += reason_f
@@ -442,6 +462,8 @@ def main() -> None:
         source_dir=args.source_dir,
         max_instances=args.max_instances,
         quiet=args.quiet,
+        reasoning_check_mode=args.reasoning_check_mode,
+        reasoning_content_ratio_threshold=args.reasoning_content_ratio_threshold,
     )
 
     im_data = score_dataset(im_data, quiet=True)

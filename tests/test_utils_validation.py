@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from swe_data_process.utils import check_reasoning_content, check_roles
 
 
@@ -150,3 +148,102 @@ class TestCheckReasoningContent:
             {"role": "assistant", "content": "done", "reasoning_content": "ok"},
         ]
         assert check_reasoning_content(messages, "slow", None) is True
+
+    def test_adaptive_default_threshold_passes_half_reasoning(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "one", "reasoning_content": "thinking"},
+            {"role": "user", "content": "more"},
+            {"role": "assistant", "content": "two"},
+        ]
+        assert (
+            check_reasoning_content(
+                messages,
+                "slow",
+                None,
+                reasoning_check_mode="adaptive",
+            )
+            is True
+        )
+
+    def test_adaptive_default_threshold_fails_below_half_reasoning(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "one", "reasoning_content": "thinking"},
+            {"role": "user", "content": "more"},
+            {"role": "assistant", "content": "two"},
+            {"role": "user", "content": "again"},
+            {"role": "assistant", "content": "three"},
+        ]
+        assert (
+            check_reasoning_content(
+                messages,
+                "slow",
+                None,
+                reasoning_check_mode="adaptive",
+            )
+            is False
+        )
+
+    def test_adaptive_custom_threshold(self):
+        messages = [
+            {"role": "assistant", "content": "one", "reasoning_content": "thinking"},
+            {"role": "assistant", "content": "two", "reasoning_content": "thinking"},
+            {"role": "assistant", "content": "three"},
+        ]
+        assert (
+            check_reasoning_content(
+                messages,
+                "slow",
+                None,
+                reasoning_check_mode="adaptive",
+                reasoning_content_ratio_threshold=0.75,
+            )
+            is False
+        )
+
+        messages[2]["reasoning_content"] = "thinking"
+        assert (
+            check_reasoning_content(
+                messages,
+                "slow",
+                None,
+                reasoning_check_mode="adaptive",
+                reasoning_content_ratio_threshold=0.75,
+            )
+            is True
+        )
+
+    def test_adaptive_respects_pseudo_turns(self):
+        messages = [
+            {"role": "assistant", "content": "pseudo"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "one", "reasoning_content": "thinking"},
+            {"role": "user", "content": "more"},
+            {"role": "assistant", "content": "two"},
+        ]
+        assert (
+            check_reasoning_content(
+                messages,
+                "slow",
+                2,
+                reasoning_check_mode="adaptive",
+            )
+            is True
+        )
+
+    def test_adaptive_fast_mode_always_true(self):
+        messages = [
+            {"role": "assistant", "content": "one"},
+            {"role": "assistant", "content": "two"},
+        ]
+        assert (
+            check_reasoning_content(
+                messages,
+                "fast",
+                None,
+                reasoning_check_mode="adaptive",
+                reasoning_content_ratio_threshold=1.0,
+            )
+            is True
+        )

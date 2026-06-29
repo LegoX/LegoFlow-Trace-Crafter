@@ -115,12 +115,14 @@ CLI arguments vary by script. Full script matrix:
 
 | 脚手架 | 脚本路径 | CLI 参数 |
 |--------|---------|----------|
-| claude-code | `claudecode_opencode/convert_cc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| open-code | `claudecode_opencode/convert_oc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
-| openhands-sdk | `openhands/convert_openhands_sdk_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
+| claude-code | `claudecode_opencode/convert_cc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
+| open-code | `claudecode_opencode/convert_oc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
+| openhands-sdk | `openhands/convert_openhands_sdk_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
 | terminus2 | `terminus2/convert_terminus2_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
 
 Most converters default `--exclude-repos-file` to this repo's `artifacts/excluded_repos.txt` to filter out reference benchmark repos (pass `--exclude-repos-file ""` to disable). `--max-instances` defaults to no limit; pass a positive integer to cap.
+
+For converters with reasoning checks, `--reasoning-check-mode` defaults to `strict`: slow trajectories require every checked assistant turn to contain non-empty `reasoning_content`. `adaptive` allows partial coverage and keeps a trajectory when the ratio of checked assistant turns with non-empty `reasoning_content` is at least `--reasoning-content-ratio-threshold` (default `0.5`).
 
 ### Repo Filtering
 
@@ -196,3 +198,5 @@ Role ordering enforced by `check_roles` in `utils.py`:
 - After `assistant`: only `tool` or `user`
 - After `tool`: only `tool` or `assistant`
 - After `user`: only `assistant`
+
+Reasoning validation is enforced by `check_reasoning_content` in `utils.py`: `fast` trajectories always pass; `slow` trajectories use either strict per-assistant-turn reasoning checks or adaptive ratio checks depending on the converter's `--reasoning-check-mode`.
