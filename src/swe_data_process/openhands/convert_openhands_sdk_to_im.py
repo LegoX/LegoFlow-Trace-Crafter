@@ -10,10 +10,12 @@ from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
     EXCLUDED_REPOS_FILE,
     check_roles,
+    check_tool_calls,
     check_reasoning_content,
-    extract_instance_id,
+    extract_instance_id_from_config,
     filter_instance_ids_by_repo,
-    get_resolved_instances_from_job_dir,
+    get_instances_from_job_dir,
+    InstanceStatus,
     load_exclusion_patterns,
     save_jsonl,
     save_lf_json,
@@ -63,6 +65,12 @@ def parse_args() -> argparse.Namespace:
         help="最多成功转换多少条，默认不限制",
     )
     parser.add_argument(
+        "--instance-status",
+        choices=("resolved", "unresolved", "all"),
+        default="resolved",
+        help="选择处理 resolved、unresolved 或全部实例，默认 resolved",
+    )
+    parser.add_argument(
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
         default=EXCLUDED_REPOS_FILE,
         help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
@@ -105,7 +113,8 @@ def _normalize_message(msg: dict[str, Any]) -> dict[str, Any]:
             'tool_calls': process_tool_call(msg.get('tool_calls', [])),
         }
         if msg.get('reasoning_content') is not None:
-            out['reasoning_content'] = msg['reasoning_content']
+            rc = msg['reasoning_content']
+            out['reasoning_content'] = rc.strip() if isinstance(rc, str) else rc
         return out
     return {
         'role': role,
@@ -173,14 +182,19 @@ def convert_dataset(
     exclusion_patterns: list | None = None,
     reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
     reasoning_content_ratio_threshold: float = 0.5,
+    instance_status: InstanceStatus = "resolved",
 ) -> list[dict[str, Any]]:
-    resolved_folders = get_resolved_instances_from_job_dir(job_dir)
+    resolved_folders = get_instances_from_job_dir(job_dir, instance_status)
+    print(f"Total {instance_status} instances: {len(resolved_folders)}")
     if exclusion_patterns:
-        instance_ids = [extract_instance_id(f) for f in resolved_folders]
+        instance_ids = [extract_instance_id_from_config(job_dir, f) for f in resolved_folders]
         kept_ids = set(filter_instance_ids_by_repo(
             instance_ids, exclusion_patterns, label="oh-sdk",
         ))
-        resolved_folders = [f for f in resolved_folders if extract_instance_id(f) in kept_ids]
+        resolved_folders = [
+            f for f in resolved_folders
+            if extract_instance_id_from_config(job_dir, f) in kept_ids
+        ]
 
     im_data: list[dict[str, Any]] = []
     skipped_no_traj = 0
@@ -189,7 +203,7 @@ def convert_dataset(
     skipped_all_failed = 0
 
     for folder_name in tqdm(resolved_folders):
-        instance_id = extract_instance_id(folder_name)
+        instance_id = extract_instance_id_from_config(job_dir, folder_name)
         traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
 
         try:
@@ -225,6 +239,10 @@ def convert_dataset(
         think_mode = _infer_think_mode(messages)
 
         if not check_roles(messages):
+            skipped_invalid += 1
+            continue
+
+        if not check_tool_calls(messages):
             skipped_invalid += 1
             continue
 
@@ -283,6 +301,7 @@ def main() -> None:
         exclusion_patterns=load_exclusion_patterns(args.exclude_repos_file),
         reasoning_check_mode=args.reasoning_check_mode,
         reasoning_content_ratio_threshold=args.reasoning_content_ratio_threshold,
+        instance_status=args.instance_status,
     )
 
     im_data = score_dataset(im_data, quiet=True)

@@ -201,7 +201,9 @@ LLM 打分结果合并到现有 `_score` dict，使用 `llm_` 前缀：
 ```json
 {
   "composite_score": 0.72,
-  "efficiency_score": 0.68,
+  "sub_score": 1.0,
+  "stp_score": 0.92,
+  "tvr_score": 0.7,
   "llm_composite_score": 0.65,
   "llm_f_problem_understanding": 0.75,
   "llm_g_solution_quality": 0.6667,
@@ -270,11 +272,11 @@ python -m swe_data_process.llm_score --input ... --no-json-mode
 | 维度 | 规则打分 (rule_score.py) | LLM 打分 (llm_score.py) |
 |------|------------------------|------------------------|
 | 评估方式 | 确定性规则、正则匹配 | LLM 语义理解 |
-| 评估内容 | 结构信号（错误率、步数、工具使用） | 语义质量（推理、代码正确性、策略） |
+| 评估内容 | TQS V2 结构信号（提交完整性、步数效率、测试验证、文件编辑集中度、脏模式惩罚） | 语义质量（推理、代码正确性、策略） |
 | 速度 | 毫秒级 | 秒级（API 调用） |
 | 成本 | 免费 | 按 token 计费 |
 | 可复现性 | 完全确定性 | temperature=0 近似确定 |
-| 字段前缀 | 无前缀（`composite_score`） | `llm_` 前缀（`llm_composite_score`） |
+| 字段前缀 | 无前缀（`composite_score`，以及 `sub_score`/`stp_score`/`tvr_score` 等组件分） | `llm_` 前缀（`llm_composite_score`） |
 
 两套分数独立存储在 `_score` dict 中，下游可按需选用或组合。
 

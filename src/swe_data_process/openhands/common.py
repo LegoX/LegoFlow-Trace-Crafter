@@ -93,5 +93,8 @@ def add_reasoning_content_to_json_data(
 
         if 0 <= turn_idx < len(assistant_indices):
             msg_idx = assistant_indices[turn_idx]
-            messages[msg_idx]['reasoning_content'] = d.get('reasoning_content')
+            reasoning_content = d.get('reasoning_content')
+            messages[msg_idx]['reasoning_content'] = (
+                reasoning_content.strip() if isinstance(reasoning_content, str) else reasoning_content
+            )
     return messages

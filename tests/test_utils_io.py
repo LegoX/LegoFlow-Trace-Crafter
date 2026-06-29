@@ -5,7 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from swe_data_process.utils import load_jsonl, print_lf_token_stats_from_texts, save_jsonl
+from swe_data_process.utils import (
+    ModelProcessingConfig,
+    get_instances_from_job_dir,
+    get_resolved_instances_from_job_dir,
+    load_jsonl,
+    print_lf_token_stats_from_texts,
+    replace_system_model_name,
+    save_jsonl,
+)
 
 
 class TestSaveJsonl:
@@ -86,6 +94,52 @@ class TestLoadJsonl:
         assert result[0]["_score"] == {"composite_score": 0.7}
 
 
+class TestGetInstancesFromJobDir:
+    def test_selects_instances_by_status(self, tmp_path):
+        result = {
+            "stats": {
+                "evals": {
+                    "batch-1": {
+                        "reward_stats": {
+                            "reward": {
+                                "1.0": ["resolved-1__abc"],
+                                "0.0": ["unresolved-1__def"],
+                            }
+                        }
+                    },
+                    "batch-2": {
+                        "reward_stats": {
+                            "reward": {
+                                "1.0": ["resolved-2__ghi"],
+                                "0.0": ["unresolved-2__jkl"],
+                            }
+                        }
+                    },
+                }
+            }
+        }
+        (tmp_path / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+        assert get_instances_from_job_dir(tmp_path) == [
+            "resolved-1__abc",
+            "resolved-2__ghi",
+        ]
+        assert get_resolved_instances_from_job_dir(tmp_path) == [
+            "resolved-1__abc",
+            "resolved-2__ghi",
+        ]
+        assert get_instances_from_job_dir(tmp_path, "unresolved") == [
+            "unresolved-1__def",
+            "unresolved-2__jkl",
+        ]
+        assert get_instances_from_job_dir(tmp_path, "all") == [
+            "resolved-1__abc",
+            "unresolved-1__def",
+            "resolved-2__ghi",
+            "unresolved-2__jkl",
+        ]
+
+
 class TestTokenStats:
     def test_includes_total_tokens(self):
         class DummyTokenizer:
@@ -100,3 +154,41 @@ class TestTokenStats:
         )
 
         assert stats["total_tokens"] == 5
+
+    def test_uses_configured_token_batch_size(self):
+        class RecordingTokenizer:
+            def __init__(self):
+                self.batches = []
+
+            def __call__(self, texts, **kwargs):
+                self.batches.append(list(texts))
+                return {"length": [len(text.split()) for text in texts]}
+
+        tokenizer = RecordingTokenizer()
+        stats = print_lf_token_stats_from_texts(
+            ["one", "two", "three"],
+            [1, 1, 1],
+            tokenizer=tokenizer,
+            model_config=ModelProcessingConfig(token_batch_size=2),
+        )
+
+        assert stats["total_tokens"] == 3
+        assert tokenizer.batches == [["one", "two"], ["three"]]
+
+
+class TestModelProcessingConfig:
+    def test_replace_system_model_name_uses_config(self):
+        messages = [
+            {"role": "system", "content": "Current model: GLM-5-FP8"},
+            {"role": "user", "content": "hi"},
+        ]
+
+        replace_system_model_name(
+            messages,
+            model_config=ModelProcessingConfig(
+                system_source_model="GLM-5-FP8",
+                system_target_model="Custom-Model",
+            ),
+        )
+
+        assert messages[0]["content"] == "Current model: Custom-Model"

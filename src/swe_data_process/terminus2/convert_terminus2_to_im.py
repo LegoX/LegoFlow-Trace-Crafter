@@ -7,9 +7,9 @@ from swe_data_process.terminus2.common import convert_one_record, iter_records, 
 from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
     EXCLUDED_REPOS_FILE,
-    extract_instance_id,
+    extract_instance_id_from_config,
     filter_instance_ids_by_repo,
-    get_resolved_instances_from_job_dir,
+    get_instances_from_job_dir,
     load_exclusion_patterns,
     load_json,
     print_lf_token_stats,
@@ -60,6 +60,12 @@ def parse_args() -> argparse.Namespace:
         help="最多成功转换多少条，默认不限制",
     )
     parser.add_argument(
+        "--instance-status",
+        choices=("resolved", "unresolved", "all"),
+        default="resolved",
+        help="选择处理 resolved、unresolved 或全部实例，默认 resolved",
+    )
+    parser.add_argument(
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
         default=EXCLUDED_REPOS_FILE,
         help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
@@ -81,23 +87,26 @@ def main() -> None:
 
     output_lf_path.parent.mkdir(parents=True, exist_ok=True)
 
-    resolved_folders = get_resolved_instances_from_job_dir(job_dir)
-    print(f"Total resolved instances: {len(resolved_folders)}")
+    resolved_folders = get_instances_from_job_dir(job_dir, args.instance_status)
+    print(f"Total {args.instance_status} instances: {len(resolved_folders)}")
 
     exclusion_patterns = load_exclusion_patterns(args.exclude_repos_file)
     if exclusion_patterns:
-        instance_ids = [extract_instance_id(f) for f in resolved_folders]
+        instance_ids = [extract_instance_id_from_config(job_dir, f) for f in resolved_folders]
         kept_ids = set(filter_instance_ids_by_repo(
             instance_ids, exclusion_patterns, label="t2",
         ))
-        resolved_folders = [f for f in resolved_folders if extract_instance_id(f) in kept_ids]
+        resolved_folders = [
+            f for f in resolved_folders
+            if extract_instance_id_from_config(job_dir, f) in kept_ids
+        ]
 
     im_records: list[dict[str, Any]] = []
     failures: list[tuple[str, str]] = []
     missing: list[str] = []
 
     for folder_name in resolved_folders:
-        instance_id = extract_instance_id(folder_name)
+        instance_id = extract_instance_id_from_config(job_dir, folder_name)
         trajectory_path = job_dir / folder_name / "agent" / "trajectory.json"
 
         if not trajectory_path.exists():
@@ -122,7 +131,7 @@ def main() -> None:
         if max_records is not None and len(im_records) >= max_records:
             break
 
-    print(f"Resolved folders: {len(resolved_folders)}, missing trajectory: {len(missing)}")
+    print(f"{args.instance_status.capitalize()} folders: {len(resolved_folders)}, missing trajectory: {len(missing)}")
     if missing and len(missing) <= 30:
         for m in missing:
             print(f"  [missing] {m}")

@@ -166,6 +166,8 @@ def convert_one_record(record: dict[str, Any]) -> dict[str, Any]:
         # 1) message + tool_calls -> assistant content
         raw_message = step.get("message")
         raw_reasoning_content = step.get("raw_reasoning_content") or step.get("reasoning_content")
+        if isinstance(raw_reasoning_content, str):
+            raw_reasoning_content = raw_reasoning_content.strip()
         raw_tool_calls = step.get("tool_calls") or []
         if raw_message or raw_tool_calls:
             if raw_reasoning_content:
