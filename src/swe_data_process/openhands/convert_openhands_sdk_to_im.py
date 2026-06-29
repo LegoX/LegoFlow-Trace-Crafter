@@ -180,9 +180,10 @@ def convert_dataset(
     job_dir: Path,
     max_samples: int | None = None,
     exclusion_patterns: list | None = None,
+    instance_status: InstanceStatus = "resolved",
+    *,
     reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
     reasoning_content_ratio_threshold: float = 0.5,
-    instance_status: InstanceStatus = "resolved",
 ) -> list[dict[str, Any]]:
     resolved_folders = get_instances_from_job_dir(job_dir, instance_status)
     print(f"Total {instance_status} instances: {len(resolved_folders)}")
@@ -299,9 +300,9 @@ def main() -> None:
         job_dir,
         max_samples=max_samples,
         exclusion_patterns=load_exclusion_patterns(args.exclude_repos_file),
+        instance_status=args.instance_status,
         reasoning_check_mode=args.reasoning_check_mode,
         reasoning_content_ratio_threshold=args.reasoning_content_ratio_threshold,
-        instance_status=args.instance_status,
     )
 
     im_data = score_dataset(im_data, quiet=True)
