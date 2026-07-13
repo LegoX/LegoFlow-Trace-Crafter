@@ -122,7 +122,7 @@ CLI arguments vary by script. Full script matrix:
 
 Most converters default `--exclude-repos-file` to this repo's `artifacts/excluded_repos.txt` to filter out reference benchmark repos (pass `--exclude-repos-file ""` to disable). `--max-instances` defaults to no limit; pass a positive integer to cap.
 
-For converters with reasoning checks, `--reasoning-check-mode` defaults to `strict`: slow trajectories require every checked assistant turn to contain non-empty `reasoning_content`. `adaptive` allows partial coverage and keeps a trajectory when the ratio of checked assistant turns with non-empty `reasoning_content` is at least `--reasoning-content-ratio-threshold` (default `0.5`).
+For converters with reasoning checks, `--reasoning-check-mode` defaults to `strict`: slow trajectories require every checked assistant turn to contain non-empty `reasoning_content`. `adaptive` allows partial coverage and keeps a trajectory when the ratio of checked assistant turns with non-empty `reasoning_content` is at least `--reasoning-content-ratio-threshold` (default `0.2`).
 
 ### Repo Filtering
 

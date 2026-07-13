@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reasoning-content-ratio-threshold",
         type=float,
-        default=0.5,
+        default=0.2,
         help="adaptive 模式下 assistant 轮次包含 reasoning_content 的最低比例",
     )
     parser.add_argument("--quiet", action="store_true", help="关闭详细日志")
@@ -89,7 +89,7 @@ def process_one_instance(
     folder_name: str,
     job_dir: Path,
     reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
-    reasoning_content_ratio_threshold: float = 0.5,
+    reasoning_content_ratio_threshold: float = 0.2,
 ) -> tuple[list[dict], int, int]:
     traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
     records = deduplicate_trajectories(traj_file)
@@ -132,7 +132,7 @@ def collect_im_data(
     max_instances: int | None,
     quiet: bool,
     reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
-    reasoning_content_ratio_threshold: float = 0.5,
+    reasoning_content_ratio_threshold: float = 0.2,
 ) -> tuple[list[dict[str, Any]], ProcessSummary]:
     im_data: list[dict[str, Any]] = []
     summary = ProcessSummary()
