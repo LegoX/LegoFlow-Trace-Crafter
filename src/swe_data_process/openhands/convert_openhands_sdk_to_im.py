@@ -84,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reasoning-content-ratio-threshold",
         type=float,
-        default=0.5,
+        default=0.2,
         help="adaptive 模式下 assistant 轮次包含 reasoning_content 的最低比例",
     )
     return parser.parse_args()
@@ -183,7 +183,7 @@ def convert_dataset(
     instance_status: InstanceStatus = "resolved",
     *,
     reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
-    reasoning_content_ratio_threshold: float = 0.5,
+    reasoning_content_ratio_threshold: float = 0.2,
 ) -> list[dict[str, Any]]:
     resolved_folders = get_instances_from_job_dir(job_dir, instance_status)
     print(f"Total {instance_status} instances: {len(resolved_folders)}")

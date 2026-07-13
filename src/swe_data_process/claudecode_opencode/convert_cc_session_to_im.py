@@ -154,7 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reasoning-content-ratio-threshold",
         type=float,
-        default=0.5,
+        default=0.2,
         help="adaptive 模式下 assistant 轮次包含 reasoning_content 的最低比例",
     )
     return parser.parse_args()
@@ -324,7 +324,7 @@ def process_one_session(
     tool_properties_order: dict[str, list[str]],
     source_dir: Path,
     reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
-    reasoning_content_ratio_threshold: float = 0.5,
+    reasoning_content_ratio_threshold: float = 0.2,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """
     Convert one CC session file → list of IM records (with instance tagging).
@@ -386,7 +386,7 @@ def collect_im_data(
     max_instances: int | None,
     quiet: bool,
     reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
-    reasoning_content_ratio_threshold: float = 0.5,
+    reasoning_content_ratio_threshold: float = 0.2,
 ) -> tuple[list[dict[str, Any]], ProcessSummary]:
     im_data: list[dict[str, Any]] = []
     summary = ProcessSummary()

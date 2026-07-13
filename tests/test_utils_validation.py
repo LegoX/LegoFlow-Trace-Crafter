@@ -149,12 +149,15 @@ class TestCheckReasoningContent:
         ]
         assert check_reasoning_content(messages, "slow", None) is True
 
-    def test_adaptive_default_threshold_passes_half_reasoning(self):
+    def test_adaptive_default_threshold_passes_one_fifth_reasoning(self):
         messages = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "one", "reasoning_content": "thinking"},
             {"role": "user", "content": "more"},
             {"role": "assistant", "content": "two"},
+            {"role": "assistant", "content": "three"},
+            {"role": "assistant", "content": "four"},
+            {"role": "assistant", "content": "five"},
         ]
         assert (
             check_reasoning_content(
@@ -166,7 +169,7 @@ class TestCheckReasoningContent:
             is True
         )
 
-    def test_adaptive_default_threshold_fails_below_half_reasoning(self):
+    def test_adaptive_default_threshold_fails_below_one_fifth_reasoning(self):
         messages = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "one", "reasoning_content": "thinking"},
@@ -174,6 +177,9 @@ class TestCheckReasoningContent:
             {"role": "assistant", "content": "two"},
             {"role": "user", "content": "again"},
             {"role": "assistant", "content": "three"},
+            {"role": "assistant", "content": "four"},
+            {"role": "assistant", "content": "five"},
+            {"role": "assistant", "content": "six"},
         ]
         assert (
             check_reasoning_content(

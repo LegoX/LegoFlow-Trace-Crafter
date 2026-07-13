@@ -628,7 +628,7 @@ def check_reasoning_content(
     think_mode: str,
     pseudo_turns: int | None,
     reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
-    reasoning_content_ratio_threshold: float = 0.5,
+    reasoning_content_ratio_threshold: float = 0.2,
 ) -> bool:
     if think_mode == "fast":
         return True
