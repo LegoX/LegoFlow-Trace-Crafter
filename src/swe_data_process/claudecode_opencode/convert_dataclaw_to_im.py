@@ -40,6 +40,7 @@ from swe_data_process.claudecode_opencode.convert_jsonl_to_openai import (
 )
 from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
+    DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     ProcessSummary,
     check_roles,
@@ -271,25 +272,31 @@ def process_one_record(
 # CLI
 # ---------------------------------------------------------------------------
 
-DEFAULT_SOURCE_DIR = Path("/mnt/haoli/data/dataclaw")
-DEFAULT_IM_OUTPUT = Path(
-    "/mnt/haoli/code/swe_data_process/output/20260408/dataclaw_cc_all.jsonl"
-)
-DEFAULT_LF_OUTPUT = Path(
-    "/mnt/haoli/code/swe_data_process/output/20260408/dataclaw_cc_all.json"
-)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert dataclaw CC sessions to IM format"
+        description="Convert dataclaw CC sessions to IM and LF data"
     )
     parser.add_argument(
-        "--source-dir", type=Path, default=DEFAULT_SOURCE_DIR,
+        "--source-dir", type=Path, required=True,
         help="Root directory containing user subdirs with conversations.jsonl",
     )
-    parser.add_argument("--im-output", type=Path, default=DEFAULT_IM_OUTPUT)
-    parser.add_argument("--lf-output", type=Path, default=DEFAULT_LF_OUTPUT)
+    parser.add_argument(
+        "--im-output",
+        type=Path,
+        required=True,
+        help="输出 IM JSONL 文件",
+    )
+    parser.add_argument(
+        "--lf-output",
+        type=Path,
+        required=True,
+        help="输出 LF JSON 文件",
+    )
+    parser.add_argument(
+        "--tokenizer-name",
+        default=DEFAULT_TOKENIZER_NAME,
+        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
+    )
     parser.add_argument(
         "--system-prompt-json", type=Path,
         default=_SCRIPT_DIR / "cc_system_prompt.json",
@@ -402,7 +409,7 @@ def main() -> None:
     print(f"Failed/skipped   : {summary.failed_instances}")
     print(f"Saved IM  -> {args.im_output}")
 
-    save_lf_json(args.lf_output, im_data)
+    save_lf_json(args.lf_output, im_data, tokenizer_name=args.tokenizer_name)
     print(f"Saved LF  -> {args.lf_output}")
 
 

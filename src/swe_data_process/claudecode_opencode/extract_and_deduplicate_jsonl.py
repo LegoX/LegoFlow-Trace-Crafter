@@ -193,12 +193,12 @@ def main() -> None:
     parser.add_argument(
         "-i", "--input",
         help="输入 jsonl 文件路径",
-        default="/home/ywxzml3j/ywxzml3juser30/code/harbor/jobs/swerebench-filtered-oraclesolved-claude-code-2.1.62-GLM-5-FP8-2-20260321233207_trajs_via_logger/12rambau__sepal_ui-411.jsonl",
+        required=True,
     )
     parser.add_argument(
         "-o", "--output",
         help="输出 jsonl 文件路径",
-        default="/home/ywxzml3j/ywxzml3juser57/test.jsonl",
+        required=True,
     )
     args = parser.parse_args()
 

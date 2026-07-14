@@ -8,6 +8,7 @@ from swe_data_process.claudecode_opencode.extract_and_deduplicate_jsonl import d
 from swe_data_process.claudecode_opencode.convert_jsonl_to_openai import convert_record
 from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
+    DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     ProcessSummary,
     check_roles,
@@ -23,26 +24,16 @@ from swe_data_process.utils import (
     tag_instance_records,
 )
 
-
-DEFAULT_JOB_DIR = Path(
-    "/home/ywxzml3j/ywxzml3juser57/code/harbor-dev/jobs/"
-    "swebench-verified-100-custom-claude-code-2.1.118-Qwen3-Coder-30B-A3B-Instruct-20260507094527"
-)
-DEFAULT_IM_OUTPUT = Path(
-    "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "glm5_swerebench_oraclesolved_cc_1k.jsonl"
-)
-DEFAULT_LF_OUTPUT = Path(
-    "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "glm5_swerebench_oraclesolved_cc_1k.json"
-)
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Convert Claude Code trajectories to IM data")
-    parser.add_argument("--job-dir", type=Path, default=DEFAULT_JOB_DIR, help="评测 job 目录")
-    parser.add_argument("--im-output", type=Path, default=DEFAULT_IM_OUTPUT, help="输出 IM JSONL 文件")
-    parser.add_argument("--lf-output", type=Path, default=DEFAULT_LF_OUTPUT, help="输出 LF JSON 文件")
+    parser = argparse.ArgumentParser(description="Convert Claude Code trajectories to IM and LF data")
+    parser.add_argument("--job-dir", type=Path, required=True, help="Harbor job 目录")
+    parser.add_argument("--im-output", type=Path, required=True, help="输出 IM JSONL 文件")
+    parser.add_argument("--lf-output", type=Path, required=True, help="输出 LF JSON 文件")
+    parser.add_argument(
+        "--tokenizer-name",
+        default=DEFAULT_TOKENIZER_NAME,
+        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
+    )
     parser.add_argument("--max-instances", type=int, default=None, help="最多处理多少个实例，默认不限制")
     parser.add_argument(
         "--instance-status",
@@ -188,7 +179,7 @@ def main() -> None:
     print(f"Failed instances: {summary.failed_instances}")
     print(f"Saved to: {args.im_output}")
 
-    save_lf_json(args.lf_output, im_data)
+    save_lf_json(args.lf_output, im_data, tokenizer_name=args.tokenizer_name)
     print(f"Saved LF data to: {args.lf_output}")
 
 

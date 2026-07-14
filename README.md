@@ -108,19 +108,25 @@ Each converter is run as a Python module via the installed package. General patt
 
 ```bash
 python -m swe_data_process.<subpackage>.convert_{scaffold}_to_im \
-    --job-dir <input> --lf-output <output> --max-instances 1000
+    --job-dir <input> \
+    --im-output <im.jsonl> \
+    --lf-output <lf.json> \
+    --tokenizer-name <model-or-tokenizer> \
+    --max-instances 1000
 ```
 
 CLI arguments vary by script. Full script matrix:
 
 | 脚手架 | 脚本路径 | CLI 参数 |
 |--------|---------|----------|
-| claude-code | `claudecode_opencode/convert_cc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
-| open-code | `claudecode_opencode/convert_oc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
-| openhands-sdk | `openhands/convert_openhands_sdk_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
-| terminus2 | `terminus2/convert_terminus2_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--max-instances`, `--exclude-repos-file` |
+| claude-code | `claudecode_opencode/convert_cc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--tokenizer-name`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
+| open-code | `claudecode_opencode/convert_oc_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--tokenizer-name`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
+| openhands-sdk | `openhands/convert_openhands_sdk_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--tokenizer-name`, `--max-instances`, `--exclude-repos-file`, `--reasoning-check-mode`, `--reasoning-content-ratio-threshold` |
+| terminus2 | `terminus2/convert_terminus2_to_im.py` | `--job-dir`, `--im-output`, `--lf-output`, `--tokenizer-name`, `--max-instances`, `--exclude-repos-file` |
 
-Most converters default `--exclude-repos-file` to this repo's `artifacts/excluded_repos.txt` to filter out reference benchmark repos (pass `--exclude-repos-file ""` to disable). `--max-instances` defaults to no limit; pass a positive integer to cap.
+Converter input/output paths are required: pass `--job-dir` or `--source-dir` plus `--im-output` and `--lf-output` explicitly. Most converters default `--exclude-repos-file` to this repo's `artifacts/excluded_repos.txt` to filter out reference benchmark repos (pass `--exclude-repos-file ""` to disable). `--max-instances` defaults to no limit; pass a positive integer to cap.
+
+Converters accept `--tokenizer-name` for LLaMA-Factory ShareGPT-format JSON conversion. It defaults to `Qwen/Qwen3-8B`; set it to the tokenizer/model name expected by the downstream training model.
 
 For converters with reasoning checks, `--reasoning-check-mode` defaults to `strict`: slow trajectories require every checked assistant turn to contain non-empty `reasoning_content`. `adaptive` allows partial coverage and keeps a trajectory when the ratio of checked assistant turns with non-empty `reasoning_content` is at least `--reasoning-content-ratio-threshold` (default `0.2`).
 
@@ -134,7 +140,8 @@ For converters with reasoning checks, `--reasoning-check-mode` defaults to `stri
 conda activate swelf
 python -m swe_data_process.<subpackage>.convert_<scaffold>_to_im \
     --job-dir <input> \
-    --lf-output <output> \
+    --im-output <im.jsonl> \
+    --lf-output <lf.json> \
     --exclude-repos-file /path/to/excluded_repos.txt
 ```
 

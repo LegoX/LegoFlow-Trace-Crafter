@@ -23,11 +23,15 @@ All converter scripts are run as Python modules via the installed package. Treat
 ```bash
 conda activate swelf
 python -m swe_data_process.<subpackage>.<script> \
-    --job-dir <input> --lf-output <output> --max-instances 1000 \
+    --job-dir <input> \
+    --im-output <im.jsonl> \
+    --lf-output <lf.json> \
+    --tokenizer-name <model-or-tokenizer> \
+    --max-instances 1000 \
     --exclude-repos-file artifacts/excluded_repos.txt  # optional, defaults to this repo path
 ```
 
-CLI args vary by script — see `README.md` for the full matrix of scripts and their arguments. Scripts also have hardcoded defaults that work without arguments.
+CLI args vary by script — see `README.md` for the full matrix of scripts and their arguments. Converter input/output paths do not have hardcoded local defaults; pass `--job-dir` or `--source-dir` plus `--im-output` and `--lf-output` explicitly.
 
 The `--exclude-repos-file` flag defaults to `artifacts/excluded_repos.txt` in this repo, enabling reference-repo filtering to exclude instances from evaluation benchmark repos. Pass `--exclude-repos-file ""` to disable.
 

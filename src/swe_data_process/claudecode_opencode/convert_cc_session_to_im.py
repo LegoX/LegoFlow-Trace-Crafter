@@ -54,6 +54,7 @@ from swe_data_process.claudecode_opencode.convert_jsonl_to_openai import (
 )
 from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
+    DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     ProcessSummary,
     check_reasoning_content,
@@ -68,24 +69,11 @@ from swe_data_process.utils import (
 
 
 # ---------------------------------------------------------------------------
-# Default paths
+# Script-local defaults
 # ---------------------------------------------------------------------------
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 
-DEFAULT_SOURCE_DIR = Path(
-    "/mnt/haoli/code/harbor-rl/haoli-memory/traj_comparison/"
-    "run_swebench-verified-cc-ascend-10task-20260403230853/jobs/"
-    "swebench-verified-cc-ascend-10task-20260403230853"
-)
-DEFAULT_IM_OUTPUT = Path(
-    "/mnt/haoli/code/swe_data_process/output/20260406/"
-    "cc_session_swebench_verified_10tasks.jsonl"
-)
-DEFAULT_LF_OUTPUT = Path(
-    "/mnt/haoli/code/swe_data_process/output/20260406/"
-    "cc_session_swebench_verified_10tasks.json"
-)
 DEFAULT_SYSTEM_PROMPT = _SCRIPT_DIR / "cc_system_prompt.json"
 DEFAULT_SYSTEM_REMINDER = _SCRIPT_DIR / "cc_system_reminder.json"
 DEFAULT_TOOL_DEFS = _SCRIPT_DIR / "cc_tool_definitions.json"
@@ -98,7 +86,7 @@ DEFAULT_TOOL_DEFS = _SCRIPT_DIR / "cc_tool_definitions.json"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Convert Claude Code session JSONL files to IM training data. "
+            "Convert Claude Code session JSONL files to IM and LF training data. "
             "System prompt, tool definitions, and system-reminder injections are "
             "loaded from offline JSON files (extracted once from a LiteLLM trajectory)."
         )
@@ -106,15 +94,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--source-dir",
         type=Path,
-        default=DEFAULT_SOURCE_DIR,
+        required=True,
         help=(
             "Directory containing CC session files. Accepts two layouts: "
             "(1) harbor job dir with */agent/sessions/projects/-testbed/*.jsonl, "
             "(2) flat dir with *.jsonl session files directly."
         ),
     )
-    parser.add_argument("--im-output", type=Path, default=DEFAULT_IM_OUTPUT)
-    parser.add_argument("--lf-output", type=Path, default=DEFAULT_LF_OUTPUT)
+    parser.add_argument(
+        "--im-output",
+        type=Path,
+        required=True,
+        help="输出 IM JSONL 文件",
+    )
+    parser.add_argument(
+        "--lf-output",
+        type=Path,
+        required=True,
+        help="输出 LF JSON 文件",
+    )
+    parser.add_argument(
+        "--tokenizer-name",
+        default=DEFAULT_TOKENIZER_NAME,
+        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
+    )
     parser.add_argument(
         "--system-prompt",
         type=Path,
@@ -475,7 +478,7 @@ def main() -> None:
     print(f"Failed/skipped   : {summary.failed_instances}")
     print(f"Saved IM  -> {args.im_output}")
 
-    save_lf_json(args.lf_output, im_data)
+    save_lf_json(args.lf_output, im_data, tokenizer_name=args.tokenizer_name)
     print(f"Saved LF  -> {args.lf_output}")
 
 

@@ -6,6 +6,7 @@ from typing import Any
 from swe_data_process.terminus2.common import convert_one_record, iter_records, to_lf_record
 from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
+    DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     extract_instance_id_from_config,
     filter_instance_ids_by_repo,
@@ -16,21 +17,6 @@ from swe_data_process.utils import (
     save_jsonl,
 )
 
-
-DEFAULT_JOB_DIR = Path(
-    "/home/ywxzml3j/ywxzml3juser57/code/harbor-dev/jobs/"
-    "swebench_multilingual-100-terminus-2-Qwen3-8B-20260511120629"
-)
-DEFAULT_IM_OUTPUT = Path(
-    "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "glm5_swerebench_oraclesolved_t2_1k.jsonl"
-)
-DEFAULT_LF_OUTPUT = Path(
-    "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "glm5_swerebench_oraclesolved_t2_1k.json"
-)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="将 terminus2 Harbor job 目录下的 agent/trajectory.json 转为 IM / LF 数据"
@@ -38,20 +24,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--job-dir",
         type=Path,
-        default=DEFAULT_JOB_DIR,
-        help="Harbor 评测 job 根目录（含 result.json）",
+        required=True,
+        help="Harbor job 目录",
     )
     parser.add_argument(
         "--im-output",
         type=Path,
-        default=DEFAULT_IM_OUTPUT,
-        help="输出 IM 格式 JSONL",
+        required=True,
+        help="输出 IM JSONL 文件",
     )
     parser.add_argument(
         "--lf-output",
         type=Path,
-        default=DEFAULT_LF_OUTPUT,
-        help="输出 LLaMA-Factory sharegpt 格式 JSON",
+        required=True,
+        help="输出 LF JSON 文件",
+    )
+    parser.add_argument(
+        "--tokenizer-name",
+        default=DEFAULT_TOKENIZER_NAME,
+        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
     )
     parser.add_argument(
         "--max-instances",
@@ -148,7 +139,11 @@ def main() -> None:
     with output_lf_path.open("w", encoding="utf-8") as f:
         json.dump(lf_records, f, ensure_ascii=False, indent=2)
 
-    print_lf_token_stats(lf_records, stats_output_path=output_lf_path.with_suffix(".stats.json"))
+    print_lf_token_stats(
+        lf_records,
+        tokenizer_name=args.tokenizer_name,
+        stats_output_path=output_lf_path.with_suffix(".stats.json"),
+    )
 
     print(f"Done. IM converted={len(im_records)}, LF converted={len(lf_records)}")
     print(f"IM Output: {output_im_path}")

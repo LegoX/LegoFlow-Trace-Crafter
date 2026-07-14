@@ -8,6 +8,7 @@ from tqdm import tqdm
 from swe_data_process.openhands.common import extract_text, process_tool_call
 from swe_data_process.rule_score import score_dataset
 from swe_data_process.utils import (
+    DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     check_roles,
     check_tool_calls,
@@ -21,21 +22,6 @@ from swe_data_process.utils import (
     save_lf_json,
 )
 
-
-DEFAULT_JOB_DIR = Path(
-    "/home/ywxzml3j/ywxzml3juser57/code/harbor-dev/jobs/"
-    "swebench-verified-100-custom-openhands-sdk-1.14.0-Qwen3-Coder-30B-A3B-Instruct-20260507094527"
-)
-DEFAULT_IM_OUTPUT = Path(
-    "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "glm5_swerebench_oraclesolved_oh_sdk_1k.jsonl"
-)
-DEFAULT_LF_OUTPUT = Path(
-    "/home/ywxzml3j/ywxzml3juser57/LLaMA-Factory/data/"
-    "glm5_swerebench_oraclesolved_oh_sdk_1k.json"
-)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="将 OpenHands SDK Harbor job 轨迹转为 IM（JSONL）与 LF JSON"
@@ -43,20 +29,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--job-dir",
         type=Path,
-        default=DEFAULT_JOB_DIR,
+        required=True,
         help="Harbor job 目录",
     )
     parser.add_argument(
         "--im-output",
         type=Path,
-        default=DEFAULT_IM_OUTPUT,
-        help="IM 数据 JSONL",
+        required=True,
+        help="输出 IM JSONL 文件",
     )
     parser.add_argument(
         "--lf-output",
         type=Path,
-        default=DEFAULT_LF_OUTPUT,
-        help="LF sharegpt 格式 JSON",
+        required=True,
+        help="输出 LF JSON 文件",
+    )
+    parser.add_argument(
+        "--tokenizer-name",
+        default=DEFAULT_TOKENIZER_NAME,
+        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
     )
     parser.add_argument(
         "--max-instances",
@@ -308,7 +299,7 @@ def main() -> None:
     im_data = score_dataset(im_data, quiet=True)
 
     save_jsonl(args.im_output, im_data)
-    save_lf_json(args.lf_output, im_data)
+    save_lf_json(args.lf_output, im_data, tokenizer_name=args.tokenizer_name)
 
     print(f"IM output: {args.im_output}")
     print(f"LF output: {args.lf_output}")
