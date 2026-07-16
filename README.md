@@ -126,7 +126,7 @@ CLI arguments vary by script. Full script matrix:
 
 Converter input/output paths are required: pass `--job-dir` or `--source-dir` plus `--im-output` and `--lf-output` explicitly. Most converters default `--exclude-repos-file` to this repo's `artifacts/excluded_repos.txt` to filter out reference benchmark repos (pass `--exclude-repos-file ""` to disable). `--max-instances` defaults to no limit; pass a positive integer to cap.
 
-Converters accept `--tokenizer-name` for LLaMA-Factory ShareGPT-format JSON conversion. It defaults to `Qwen/Qwen3-8B`; set it to the tokenizer/model name expected by the downstream training model.
+Converters accept `--tokenizer-name` for LLaMA-Factory ShareGPT-format JSON conversion. It defaults to `Qwen/Qwen3.5-35B-A3B`; set it to the tokenizer/model name expected by the downstream training model.
 
 For converters with reasoning checks, `--reasoning-check-mode` defaults to `strict`: slow trajectories require every checked assistant turn to contain non-empty `reasoning_content`. `adaptive` allows partial coverage and keeps a trajectory when the ratio of checked assistant turns with non-empty `reasoning_content` is at least `--reasoning-content-ratio-threshold` (default `0.2`).
 
