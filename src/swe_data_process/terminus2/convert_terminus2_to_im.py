@@ -13,6 +13,7 @@ from swe_data_process.utils import (
     get_instances_from_job_dir,
     load_exclusion_patterns,
     load_json,
+    load_task_metadata_from_trial,
     print_lf_token_stats,
     save_jsonl,
 )
@@ -105,6 +106,7 @@ def main() -> None:
             continue
 
         try:
+            metadata = load_task_metadata_from_trial(job_dir, folder_name)
             obj = load_json(trajectory_path)
             all_records = list(iter_records(obj))
             if not all_records:
@@ -113,6 +115,7 @@ def main() -> None:
             for r in all_records:
                 im_record = convert_one_record(r)
                 im_record["_instance_id"] = instance_id
+                im_record["_instance_metadata"] = metadata
                 im_records.append(im_record)
                 if max_records is not None and len(im_records) >= max_records:
                     break

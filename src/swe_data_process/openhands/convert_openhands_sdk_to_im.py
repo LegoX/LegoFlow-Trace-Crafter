@@ -18,6 +18,7 @@ from swe_data_process.utils import (
     get_instances_from_job_dir,
     InstanceStatus,
     load_exclusion_patterns,
+    load_task_metadata_from_trial,
     save_jsonl,
     save_lf_json,
 )
@@ -256,6 +257,13 @@ def convert_dataset(
         }
         usage = last_record.get('usage')
 
+        try:
+            metadata = load_task_metadata_from_trial(job_dir, folder_name)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            skipped_invalid += 1
+            print(f"读取 task metadata 失败 {instance_id}: {e}")
+            continue
+
         im_data.append({
             'messages': messages,
             'tools': tools,
@@ -264,6 +272,7 @@ def convert_dataset(
             '_instance_id': instance_id,
             '_gen_params': gen_params,
             '_usage': usage,
+            '_instance_metadata': metadata,
         })
 
         if max_samples is not None and len(im_data) >= max_samples:

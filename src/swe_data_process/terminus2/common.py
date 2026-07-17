@@ -233,6 +233,8 @@ def to_lf_record(im_record: dict[str, Any]) -> dict[str, Any]:
         rec["_score"] = im_record["_score"]
     if "_instance_id" in im_record:
         rec["_instance_id"] = im_record["_instance_id"]
+    if "_instance_metadata" in im_record:
+        rec["_instance_metadata"] = im_record["_instance_metadata"]
     return rec
 
 

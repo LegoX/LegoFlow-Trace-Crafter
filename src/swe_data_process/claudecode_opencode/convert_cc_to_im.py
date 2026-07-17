@@ -18,6 +18,7 @@ from swe_data_process.utils import (
     filter_instance_ids_by_repo,
     get_instances_from_job_dir,
     load_exclusion_patterns,
+    load_task_metadata_from_trial,
     save_jsonl,
     save_lf_json,
     should_keep_instance,
@@ -129,7 +130,8 @@ def collect_im_data(
             summary.reasoning_filtered += reasoning_filtered
 
             if should_keep_instance(role_filtered, reasoning_filtered):
-                tag_instance_records(converted_records, instance_id)
+                metadata = load_task_metadata_from_trial(job_dir, folder_name)
+                tag_instance_records(converted_records, instance_id, metadata)
                 im_data.extend(converted_records)
                 kept_folder_count += 1
         except Exception as e:

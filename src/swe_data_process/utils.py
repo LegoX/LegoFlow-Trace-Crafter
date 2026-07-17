@@ -12,6 +12,11 @@ import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 EXCLUDED_REPOS_FILE = REPO_ROOT / "artifacts" / "excluded_repos.txt"
 
@@ -38,6 +43,7 @@ _PANGUML_COMPAT_UNIQUE_INFO_KEYS = (
     "_score",
     "_gen_params",
     "_usage",
+    "_instance_metadata",
 )
 
 
@@ -735,6 +741,8 @@ def convert_json_to_lf_format(
             lf_record['_gen_params'] = item['_gen_params']
         if '_usage' in item:
             lf_record['_usage'] = item['_usage']
+        if '_instance_metadata' in item:
+            lf_record['_instance_metadata'] = item['_instance_metadata']
         lf_all_json_data.append(lf_record)
 
     stats: dict[str, Any] = {}
@@ -871,11 +879,14 @@ def detect_agent_type(record: dict[str, Any]) -> str:
 def tag_instance_records(
     records: list[dict[str, Any]],
     instance_id: str,
+    instance_metadata: dict[str, Any] | None = None,
 ) -> None:
-    """为同一 instance 的所有 converted records 就地添加 _instance_id 和 _agent_type。"""
+    """为同一 instance 的所有 converted records 添加实例信息和任务 metadata。"""
     for record in records:
         record["_instance_id"] = instance_id
         record["_agent_type"] = detect_agent_type(record)
+        if instance_metadata is not None:
+            record["_instance_metadata"] = instance_metadata
 
 
 def filter_by_score_bundled(
@@ -994,12 +1005,58 @@ def extract_instance_id(folder_name: str) -> str:
     return folder_name.rsplit("__", 1)[0]
 
 
-def extract_instance_id_from_config(job_dir: Path, folder_name: str) -> str:
-    """Read the authoritative instance_id from a Harbor instance config."""
+def load_trial_config(job_dir: Path, folder_name: str) -> dict[str, Any]:
+    """Read a Harbor trial's config.json."""
     config_path = job_dir / folder_name / "config.json"
     with config_path.open("r", encoding="utf-8") as f:
         config = json.load(f)
-    return Path(config["task"]["path"]).name
+    if not isinstance(config, dict):
+        raise ValueError(f"Trial config must be a JSON object: {config_path}")
+    return config
+
+
+def _task_dir_from_trial_config(
+    config: dict[str, Any],
+    trial_dir: Path,
+) -> Path:
+    task_config = config.get("task")
+    if not isinstance(task_config, dict):
+        raise ValueError(f"Missing task object in trial config: {trial_dir / 'config.json'}")
+
+    task_path = task_config.get("path")
+    if not isinstance(task_path, str) or not task_path.strip():
+        raise ValueError(f"Missing task.path in trial config: {trial_dir / 'config.json'}")
+
+    task_dir = Path(task_path).expanduser()
+    if not task_dir.is_absolute():
+        task_dir = trial_dir / task_dir
+    return task_dir
+
+
+def load_task_metadata_from_trial(
+    job_dir: Path,
+    folder_name: str,
+) -> dict[str, Any]:
+    """Load the [metadata] table from the task.toml referenced by a trial."""
+    trial_dir = job_dir / folder_name
+    config = load_trial_config(job_dir, folder_name)
+    task_dir = _task_dir_from_trial_config(config, trial_dir)
+    task_toml_path = task_dir / "task.toml"
+
+    with task_toml_path.open("rb") as f:
+        task_data = tomllib.load(f)
+
+    metadata = task_data.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"Missing [metadata] table in task config: {task_toml_path}")
+    return metadata
+
+
+def extract_instance_id_from_config(job_dir: Path, folder_name: str) -> str:
+    """Read the authoritative instance_id from a Harbor instance config."""
+    config = load_trial_config(job_dir, folder_name)
+    task_dir = _task_dir_from_trial_config(config, job_dir / folder_name)
+    return task_dir.name
 
 
 # ---------------------------------------------------------------------------
