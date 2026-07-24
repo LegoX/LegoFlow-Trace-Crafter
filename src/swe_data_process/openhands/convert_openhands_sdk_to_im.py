@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reasoning-check-mode",
         choices=("strict", "adaptive"),
-        default="strict",
+        default="adaptive",
         help="slow 轨迹 reasoning_content 过滤模式",
     )
     parser.add_argument(
@@ -174,7 +174,7 @@ def convert_dataset(
     exclusion_patterns: list | None = None,
     instance_status: InstanceStatus = "resolved",
     *,
-    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_check_mode: Literal["strict", "adaptive"] = "adaptive",
     reasoning_content_ratio_threshold: float = 0.2,
 ) -> list[dict[str, Any]]:
     resolved_folders = get_instances_from_job_dir(job_dir, instance_status)

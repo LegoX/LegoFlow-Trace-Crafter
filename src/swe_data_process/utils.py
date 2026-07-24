@@ -633,7 +633,7 @@ def check_reasoning_content(
     messages: list[dict[str, Any]],
     think_mode: str,
     pseudo_turns: int | None,
-    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_check_mode: Literal["strict", "adaptive"] = "adaptive",
     reasoning_content_ratio_threshold: float = 0.2,
 ) -> bool:
     if think_mode == "fast":

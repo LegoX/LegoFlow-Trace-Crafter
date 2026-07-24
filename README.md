@@ -128,7 +128,7 @@ Converter input/output paths are required: pass `--job-dir` or `--source-dir` pl
 
 Converters accept `--tokenizer-name` for LLaMA-Factory ShareGPT-format JSON conversion. It defaults to `Qwen/Qwen3.5-35B-A3B`; set it to the tokenizer/model name expected by the downstream training model.
 
-For converters with reasoning checks, `--reasoning-check-mode` defaults to `strict`: slow trajectories require every checked assistant turn to contain non-empty `reasoning_content`. `adaptive` allows partial coverage and keeps a trajectory when the ratio of checked assistant turns with non-empty `reasoning_content` is at least `--reasoning-content-ratio-threshold` (default `0.2`).
+For converters with reasoning checks, `--reasoning-check-mode` defaults to `adaptive`: slow trajectories are kept when the ratio of checked assistant turns with non-empty `reasoning_content` is at least `--reasoning-content-ratio-threshold` (default `0.2`). `strict` requires every checked assistant turn to contain non-empty `reasoning_content`.
 
 ### Repo Filtering
 

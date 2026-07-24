@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reasoning-check-mode",
         choices=("strict", "adaptive"),
-        default="strict",
+        default="adaptive",
         help="slow 轨迹 reasoning_content 过滤模式",
     )
     parser.add_argument(
@@ -80,7 +80,7 @@ def _is_subagent_record(record: dict) -> bool:
 def process_one_instance(
     folder_name: str,
     job_dir: Path,
-    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_check_mode: Literal["strict", "adaptive"] = "adaptive",
     reasoning_content_ratio_threshold: float = 0.2,
 ) -> tuple[list[dict], int, int]:
     traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
@@ -123,7 +123,7 @@ def collect_im_data(
     job_dir: Path,
     max_instances: int | None,
     quiet: bool,
-    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_check_mode: Literal["strict", "adaptive"] = "adaptive",
     reasoning_content_ratio_threshold: float = 0.2,
 ) -> tuple[list[dict[str, Any]], ProcessSummary]:
     im_data: list[dict[str, Any]] = []

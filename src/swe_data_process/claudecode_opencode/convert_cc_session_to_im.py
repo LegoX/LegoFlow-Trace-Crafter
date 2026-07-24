@@ -151,7 +151,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reasoning-check-mode",
         choices=("strict", "adaptive"),
-        default="strict",
+        default="adaptive",
         help="slow 轨迹 reasoning_content 过滤模式",
     )
     parser.add_argument(
@@ -326,7 +326,7 @@ def process_one_session(
     normalized_tools: list[dict[str, Any]],
     tool_properties_order: dict[str, list[str]],
     source_dir: Path,
-    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_check_mode: Literal["strict", "adaptive"] = "adaptive",
     reasoning_content_ratio_threshold: float = 0.2,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """
@@ -388,7 +388,7 @@ def collect_im_data(
     source_dir: Path,
     max_instances: int | None,
     quiet: bool,
-    reasoning_check_mode: Literal["strict", "adaptive"] = "strict",
+    reasoning_check_mode: Literal["strict", "adaptive"] = "adaptive",
     reasoning_content_ratio_threshold: float = 0.2,
 ) -> tuple[list[dict[str, Any]], ProcessSummary]:
     im_data: list[dict[str, Any]] = []

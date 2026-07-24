@@ -117,14 +117,24 @@ class TestCheckReasoningContent:
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
         ]
-        assert check_reasoning_content(messages, "slow", None) is False
+        assert (
+            check_reasoning_content(
+                messages, "slow", None, reasoning_check_mode="strict"
+            )
+            is False
+        )
 
     def test_slow_mode_empty_reasoning(self):
         messages = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello", "reasoning_content": ""},
         ]
-        assert check_reasoning_content(messages, "slow", None) is False
+        assert (
+            check_reasoning_content(
+                messages, "slow", None, reasoning_check_mode="strict"
+            )
+            is False
+        )
 
     def test_pseudo_turns_skips_initial(self):
         messages = [
@@ -132,13 +142,23 @@ class TestCheckReasoningContent:
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello", "reasoning_content": "thinking"},
         ]
-        assert check_reasoning_content(messages, "slow", 2) is True
+        assert (
+            check_reasoning_content(
+                messages, "slow", 2, reasoning_check_mode="strict"
+            )
+            is True
+        )
 
     def test_pseudo_turns_zero(self):
         messages = [
             {"role": "assistant", "content": "no reasoning"},
         ]
-        assert check_reasoning_content(messages, "slow", 0) is False
+        assert (
+            check_reasoning_content(
+                messages, "slow", 0, reasoning_check_mode="strict"
+            )
+            is False
+        )
 
     def test_non_assistant_roles_ignored(self):
         messages = [
@@ -147,7 +167,12 @@ class TestCheckReasoningContent:
             {"role": "tool", "content": "result"},
             {"role": "assistant", "content": "done", "reasoning_content": "ok"},
         ]
-        assert check_reasoning_content(messages, "slow", None) is True
+        assert (
+            check_reasoning_content(
+                messages, "slow", None, reasoning_check_mode="strict"
+            )
+            is True
+        )
 
     def test_adaptive_default_threshold_passes_one_fifth_reasoning(self):
         messages = [
