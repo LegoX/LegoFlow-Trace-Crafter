@@ -59,13 +59,13 @@ composite_score = Σ(weight_i × transformed(component_i)) / Σ(weight_i)
 衡量 assistant turn 数是否处在合理范围。
 
 ```text
-5 <= assistant_turns <= 30: 1.0
+5 <= assistant_turns <= 80: 1.0
 assistant_turns < 5: assistant_turns / 5
-assistant_turns >= 90: 0.0
-30 < assistant_turns < 90: quadratic decay
+assistant_turns >= 200: 0.0
+80 < assistant_turns < 200: quadratic decay
 ```
 
-TQS V2 不再依赖数据集内同脚手架的中位步数，因此 `score_dataset()` 是单遍扫描，`score_record()` 不需要 `median_steps`。
+区间与当前常见 agent `max_turn=200` 对齐：满分覆盖中短轨迹，打满 turn cap 视为步数效率为 0。TQS V2 不再依赖数据集内同脚手架的中位步数，因此 `score_dataset()` 是单遍扫描，`score_record()` 不需要 `median_steps`。
 
 ### TVR: Test Verification
 

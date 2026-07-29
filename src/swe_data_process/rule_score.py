@@ -1627,8 +1627,9 @@ def _compute_fec(messages: list[dict], scaffold: str) -> float | None:
 # 10. STP — 步数效率 (r=-0.21 with resolved: fewer steps = better)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_STP_OPTIMAL_RANGE = (5, 30)
-_STP_MAX_STEPS = 90
+# 与当前 agent max_turn=200 对齐：满分落到中短轨迹，打满 turn cap 得 0。
+_STP_OPTIMAL_RANGE = (5, 80)
+_STP_MAX_STEPS = 200
 
 
 def _compute_stp(messages: list[dict]) -> float:
