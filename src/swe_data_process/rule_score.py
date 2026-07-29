@@ -18,6 +18,21 @@ TQS V2 最终综合分 (Fail-soft 加权):
 OEC/IAC/PED/PSN/TTE/SCP 仍会计算并输出，作为诊断指标保留；
 它们当前权重为 0，不参与 composite_score。
 
+多语言正确性要点:
+
+  * 基于 observation 内容的判定先经 _scan_window：剥离 ANSI（转义序列会插进词内部，
+    破坏 `\\bFAILED\\b` 之类的边界锚定），并同时取输出的开头与结尾（结论在末尾）。
+  * 测试通过/失败由 _test_run_outcome 判定（pass / unknown / fail），覆盖 Go、Rust、
+    Maven、Gradle、CTest、GoogleTest、Jest、Vitest、Mocha、PHPUnit、RSpec、pytest、
+    unittest 等的摘要形态。它与 _is_error_result（工具调用错误率口径）**分离**：
+    测试断言失败是有效验证行为，不是工具调用失败。
+  * 判定「测试执行」逐 shell 段进行（_iter_run_segments），段首是 grep/rm/git/cat
+    等只读命令时整段跳过 —— 否则 `git diff .../src/main/java/Foo.java` 会因路径里
+    的 java、`rm -f vitest-tmp.config.ts` 会因文件名而被误判成跑测试。
+  * 注意：脚手架回填的 `[The command completed with exit code N.]` 不可用作失败信号
+    —— 命令常写成 `... | tail -40`，管道使 shell 退出码恒为 tail 的 0。可用的是
+    agent 自己回显的 `${PIPESTATUS[0]}` 与输出内容本身。
+
 用法:
   conda activate swelf
   python -m swe_data_process.rule_score --input <im.jsonl> [--output <scored.jsonl>] [--max-instances N]
@@ -91,8 +106,68 @@ _CC_OC_TOOL_NAMES_LOWER = frozenset({
     "exitplanmode", "enterworktree",
 })
 
+# --- Observation text normalization ---
+# 命令 observation 普遍含 ANSI 转义（grep --color、mvn/cargo/gradle 的彩色输出）。
+# 转义序列会插进**词内部**，例如 Maven 的
+#   "Tests run\x1b[m\x1b[K: 6, \x1b[01;31m\x1b[KFailures\x1b[m\x1b[K: 2"
+# 其中 `\x1b[K` 的 `K` 是 word 字符，会让 `\bFAILED\b` 这类边界锚定失效。
+# 因此所有基于内容的模式匹配都必须先剥掉 ANSI/回车。
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|\r")
+
+
+def _strip_ansi(text: str) -> str:
+    """剥离 ANSI 转义序列与裸 CR（终端输出普遍存在，会破坏词边界匹配）。"""
+    if not text or "\x1b" not in text and "\r" not in text:
+        return text
+    return _ANSI_RE.sub("", text)
+
+
+def _text_of(content: Any) -> str:
+    """把 observation/message 的 content 归一为纯文本。
+
+    兼容 str 与 content-block 列表两种格式（后者见 _assistant_text_content）。
+    没有这层归一时，list 型 content 会让下游正则抛 TypeError。
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                t = block.get("text")
+                if t is not None:
+                    parts.append(str(t))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    return str(content)
+
+
 # --- Error detection ---
+# 扫描窗口：命令输出的**结论**通常在末尾（测试摘要、BUILD FAILURE、exit code 回显），
+# 而中间是大段正常日志。只扫开头会让超长输出的失败摘要落在窗口外，因此取「头 + 尾」。
 _ERROR_SCAN_LIMIT = 3000
+_ERROR_SCAN_TAIL = 3000
+# 尾窗对齐到行首时，最多向前丢弃多少字符的残行（超过则认为是超长单行，不丢）。
+_ERROR_SCAN_ALIGN = 300
+
+
+def _scan_window(content: Any) -> str:
+    """取用于模式匹配的文本窗口：剥离 ANSI 后的「开头 + 结尾」。
+
+    尾窗必须先对齐到行首：text[-N:] 从任意字符位置切开，拼接后被截断的**行中间**
+    片段会变成伪造的行首，使 `^FAIL`、`^(?:FAILED|ERROR)\\s`、`^\\s*\\[ERROR\\]` 这些
+    行首锚定的模式命中根本不在行首的文本。只在开头 _ERROR_SCAN_ALIGN 字符内找换行。
+    """
+    text = _strip_ansi(_text_of(content))
+    if len(text) <= _ERROR_SCAN_LIMIT + _ERROR_SCAN_TAIL:
+        return text
+    tail = text[-_ERROR_SCAN_TAIL:]
+    nl = tail.find("\n")
+    tail = tail[nl + 1:] if 0 <= nl < _ERROR_SCAN_ALIGN else tail
+    return text[:_ERROR_SCAN_LIMIT] + "\n" + tail
 
 # 显式工具失败标记：由脚手架/运行时注入，独立于工具输出内容，因此对所有工具类型都
 # 可靠。文件查看/编辑工具返回的源码内容不会把这些 wrapper 文本当作数据出现。
@@ -117,7 +192,8 @@ _TOOL_ERROR_MARKERS: list[re.Pattern[str]] = [
 _ERROR_PATTERNS_HARD: list[re.Pattern[str]] = [
     re.compile(r"command not found"),
     re.compile(r"Permission denied"),
-    re.compile(r"exit code[:\s]+[1-9]", re.IGNORECASE),
+    # 允许负号：超时/信号杀死时脚手架回填 `exit code -1` / `-9`，缺了 `-?` 会整类漏判。
+    re.compile(r"exit code[:\s]+-?[1-9]", re.IGNORECASE),
     re.compile(r"returned non-zero exit status"),
 ]
 _ERROR_PATTERNS_SOFT: list[re.Pattern[str]] = [
@@ -133,8 +209,157 @@ _ERROR_PATTERNS_SOFT: list[re.Pattern[str]] = [
     re.compile(r"\bFAILED\b"),
 ]
 
+# --- 测试结果判定（多语言）---
+# 供 TVR 的 late_test_success 使用，**不进入** _ERROR_PATTERNS_SOFT / 工具调用错误率
+# 口径 —— 一次正常的「测试跑完但断言失败」是有效的验证行为，不是工具调用失败。
+#
+# 关键背景：agent 极少直接跑 runner，命令通常形如
+#     <runner> ... 2>&1 | tail -40; echo "exit: ${PIPESTATUS[0]}"
+# 管道使 shell 退出码恒为 tail 的 0，脚手架回填的
+#     [The command completed with exit code 0.]
+# 因而**不能**作为失败信号；必须靠输出内容本身与 agent 自己回显的 PIPESTATUS。
+# 非零计数：必须排除 0，否则 "0 failed" / "0 failures"（**通过**时的正常输出，Rust、Go、
+# pytest、jest、Maven 都会打印）会被判成失败 —— 这是本类模式最容易犯的反向错误。
+_NZ = r"(?!0+\b)\d+"
+
+_TEST_FAIL_PATTERNS: list[re.Pattern[str]] = [
+    # 通用：agent 自己回显的非零 PIPESTATUS（exit: 1 / EXIT: 2 / ctest exit: 8 /
+    # DOCTEST EXIT: 101）。刻意不含 `status:`，否则 HTTP 测试里的 `status: 200` 会误命中。
+    re.compile(r"\bexit(?:\s*code)?\s*[:=]\s*-?(?!0+\b)\d{1,3}\b", re.IGNORECASE),
+    # pytest / unittest
+    re.compile(r"^(?:FAILED|ERROR)\s+\S+", re.MULTILINE),
+    re.compile(rf"\b{_NZ}\s+failed\b", re.IGNORECASE),
+    re.compile(r"^(?:FAIL|ERROR):\s", re.MULTILINE),
+    # Go：独立成行的 FAIL，或 --- FAIL:
+    re.compile(r"^\s*---\s*FAIL:", re.MULTILINE),
+    re.compile(r"^FAIL\b", re.MULTILINE),
+    # Rust：test result: FAILED / 编译错误 / doctest 失败
+    re.compile(r"test result:\s*FAILED"),
+    re.compile(r"^error(?:\[E\d+\])?:", re.MULTILINE),
+    re.compile(r"Couldn't compile the test"),
+    re.compile(r"\berror: (?:doctest failed|test failed)"),
+    # Java / Maven / Gradle
+    re.compile(rf"Tests run:[^\n]*?(?:Failures|Errors):\s*{_NZ}"),
+    re.compile(r"\bBUILD FAILURE\b"),
+    re.compile(r"^\s*\[ERROR\]\s", re.MULTILINE),
+    re.compile(r"\b\w+Test\b\s*>\s*\S+\s+FAILED\b"),
+    re.compile(rf"\b\d+\s+tests? completed,\s*{_NZ}\s+failed"),
+    # CTest / GoogleTest / Catch2（C、C++ 主力）
+    re.compile(r"The following tests FAILED"),
+    re.compile(rf"\b{_NZ}\s+tests? failed out of\b"),
+    re.compile(r"Errors while running CTest"),
+    re.compile(r"\[\s*FAILED\s*\]"),
+    # Jest / Vitest / Mocha / Jasmine
+    re.compile(rf"^Tests:\s+[^\n]*?\b{_NZ}\s+failed", re.MULTILINE),
+    re.compile(rf"^Test Suites:\s+[^\n]*?\b{_NZ}\s+failed", re.MULTILINE),
+    re.compile(rf"\b{_NZ}\s+failing\b"),
+    re.compile(r"No test files found"),
+    re.compile(r"error Command failed with exit code [1-9]"),
+    # PHPUnit / RSpec / Ruby minitest
+    re.compile(r"^FAILURES!", re.MULTILINE),
+    re.compile(rf"\b{_NZ}\s+failures?\b", re.IGNORECASE),
+    re.compile(r"\bfail:\s*[1-9]"),
+    # 通用编译/构建失败
+    re.compile(r"\b(?:compilation|build) failed\b", re.IGNORECASE),
+]
+
+# 明确的「测试通过」信号。用于把「确实跑了测试且通过」与「输出里看不出结论」区分开。
+# 与失败模式同理，所有计数都必须是**非零**：`0 passing` / `OK (0 tests)` /
+# `Tests run: 0, Failures: 0, Errors: 0`（Maven 多模块里没有测试的模块）表示
+# 一个测试都没跑，那是「无结论」而不是「通过」，判 pass 会白送 late_test_success=1.0。
+_TEST_PASS_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"test result:\s*ok\."),                       # Rust
+    re.compile(r"^ok\s+\S+", re.MULTILINE),                   # Go
+    re.compile(r"^PASS\b", re.MULTILINE),                     # Go
+    re.compile(rf"\b{_NZ}\s+passed\b", re.IGNORECASE),        # pytest / jest
+    re.compile(r"\b100%\s+tests passed\b"),                   # CTest
+    re.compile(r"\bBUILD SUCCESS(?:FUL)?\b"),                 # Maven / Gradle
+    re.compile(rf"Tests run:\s*{_NZ},\s*Failures:\s*0,\s*Errors:\s*0"),
+    re.compile(rf"\bOK\s*\({_NZ} tests?\)"),                  # JUnit / PHPUnit
+    re.compile(r"^\s*\[\s*PASSED\s*\]", re.MULTILINE),        # GoogleTest
+    re.compile(rf"\b{_NZ}\s+passing\b"),                      # Mocha
+    re.compile(rf"\b{_NZ}\s+examples?,\s*0\s+failures\b"),    # RSpec
+    re.compile(rf"\bPass:\s*{_NZ},\s*fail:\s*0\b"),           # Ruby minitest
+    re.compile(r"\ball (?:tests|checks) (?:passed|PASS)\b", re.IGNORECASE),
+    # Python unittest 的标准通过输出：`Ran 97 tests in 9.254s` + 空行 + `OK`
+    re.compile(rf"Ran {_NZ} tests? in [\d.]+s\s*\n+\s*OK\b"),
+    re.compile(r"^OK\s*(?:\(skipped=\d+\))?\s*$", re.MULTILINE),
+    re.compile(r"\berror count:\s*0\b", re.IGNORECASE),       # agent 自建的 tsc 检查
+]
+
+# 脚手架注入的尾部标记。这些行里的 "exit code 0" **不能**当作通过信号：命令通常经过
+# `| tail -N`，管道使 shell 退出码恒为 tail 的 0，与测试是否通过无关。
+# 判定「通过」时先剥掉它们，只认 agent 自己回显的 PIPESTATUS。
+_SCAFFOLD_MARKER_RE = re.compile(
+    r"^\[(?:The command completed with exit code -?\d+\.|"
+    r"Command finished with exit code -?\d+|"
+    r"Current working directory:[^\]]*|"
+    r"Python interpreter:[^\]]*|"
+    r"Below is the output of the previous command\.?)\]\s*$",
+    re.MULTILINE,
+)
+# agent 自己回显的零退出码：`exit: 0` / `exit:0` / `=== ctest exit: 0 ===`
+_TEST_PASS_ECHO_RE = re.compile(r"\bexit(?:\s*code)?\s*[:=]\s*0+\b", re.IGNORECASE)
+
+# 「一个测试都没跑起来」的显式标记。runner 此时仍会打印成功收尾（unittest 的裸 `OK`、
+# Maven 的 `BUILD SUCCESS`、退出码 0），但什么都没验证 —— 判 pass 会白送满分，
+# 必须单列为 unknown。刻意不含 Go 的 `[no test files]`：那是多包运行里没有测试的
+# 单个包，同一次运行的其它包仍在正常跑。
+_TEST_ZERO_RUN_RE = re.compile(
+    r"\bRan 0+ tests?\b"
+    r"|\bno tests? (?:ran|were found|to run|found)\b"
+    r"|\bcollected 0+ items\b",
+    re.IGNORECASE,
+)
+
+
+def _test_run_outcome(content: Any) -> str:
+    """判定一次测试执行的结果：'fail' / 'pass' / 'unknown'。
+
+    与 _is_error_result 分开：测试断言失败是有效的验证行为，不应计入工具调用错误率。
+
+    判定顺序刻意如此：
+    1. 工具层/运行时硬失败（脚手架失败标记、command not found、非零退出码）—— 命令
+       根本没跑起来，优先于任何输出内容。
+    2. 显式失败摘要（多语言）。失败优先于通过：`11 passed; 1 failed` 判 fail。
+    3. 显式通过摘要。放在 soft error 之前 —— 一次通过的测试完全可能在输出里合法地
+       打印 `TypeError` / `No such file or directory`（正是它在测的错误路径），
+       此时 `100% tests passed` 应当压过这些 soft 信号。
+    4. soft error 兜底。
+    5. 都没有 → unknown（输出里看不出结论，例如只 `| tail -5` 截了几行日志）。
+    """
+    text = _scan_window(content)
+    if not text:
+        return "unknown"
+    for pat in _TOOL_ERROR_MARKERS:
+        if pat.search(text):
+            return "fail"
+    for pat in _ERROR_PATTERNS_HARD:
+        if pat.search(text):
+            return "fail"
+    for pat in _TEST_FAIL_PATTERNS:
+        if pat.search(text):
+            return "fail"
+    # 「零测试跑成」优先于任何通过信号：runner 仍会打印 OK / BUILD SUCCESS / exit 0
+    if _TEST_ZERO_RUN_RE.search(text):
+        return "unknown"
+    for pat in _TEST_PASS_PATTERNS:
+        if pat.search(text):
+            return "pass"
+    # agent 自己回显的零退出码（需先剥掉脚手架恒为 0 的尾部标记，见 _SCAFFOLD_MARKER_RE）
+    if _TEST_PASS_ECHO_RE.search(_SCAFFOLD_MARKER_RE.sub("", text)):
+        return "pass"
+    for pat in _ERROR_PATTERNS_SOFT:
+        if pat.search(text):
+            return "fail"
+    return "unknown"
+
 # --- Tool classification ---
-_PURE_EDIT_TOOL_NAMES = frozenset({"edit", "write"})
+# 纯写工具：调用即写文件。须含 Claude Code 的 MultiEdit / NotebookEdit 与 OpenCode 的
+# patch，否则这些脚手架的编辑会被 FEC 整体漏掉。
+_PURE_EDIT_TOOL_NAMES = frozenset({
+    "edit", "write", "multiedit", "notebookedit", "patch",
+})
 _MULTI_EDITOR_TOOL_NAMES = frozenset({"file_editor", "str_replace_editor"})
 _EDITOR_WRITE_COMMANDS = frozenset({"str_replace", "create", "insert"})
 _EDIT_TOOL_NAMES = _PURE_EDIT_TOOL_NAMES | _MULTI_EDITOR_TOOL_NAMES
@@ -154,9 +379,12 @@ _EXECUTION_TOOL_NAMES = frozenset({
 _EDITOR_SUBCOMMANDS = frozenset({"view", "create", "str_replace", "insert", "undo_edit"})
 # 编辑器专属参数键：bash 类工具从不携带，用作非执行类的辅助判据。
 _EDITOR_ONLY_ARG_KEYS = ("old_str", "new_str", "file_text", "view_range", "insert_line")
+# 同理的非执行类专属键。task_tracker 也带 command（取值是 plan/add 而非 shell 命令），
+# 只看「command 非空」会把它判成执行类。
+_NON_EXEC_ARG_KEYS = ("task_list", "thought", "task_completed")
 # 携带 shell 命令的参数键。
 _SHELL_CMD_ARG_KEYS = ("command", "cmd", "keystrokes")
-_FILE_PATH_KEYS = ("file_path", "filePath", "path")
+_FILE_PATH_KEYS = ("file_path", "filePath", "path", "notebook_path", "notebookPath")
 
 # --- Test detection ---
 _TEST_RUN_RE = re.compile(
@@ -164,22 +392,53 @@ _TEST_RUN_RE = re.compile(
     r"pytest|py\.test|python3?\s+-m\s+pytest|python3?\s+-m\s+unittest"
     r"|unittest|python3?\s+test_|nosetests"
     r"|go\s+test|cargo\s+test|ctest|gtest_filter"
-    r"|mvn\s+(?:test|verify|surefire)|gradle\s+test|gradlew\s+test"
+    # Maven / Gradle：goal 与命令之间通常隔着一串 flag 和模块选择器，不能要求紧邻
+    # （`mvn -o -q test`、`./mvnw -q -pl mod -am test`、`./gradlew -q :mod:test`）
+    r"|(?:mvn|mvnw)\b[^\n|&;]{0,200}?\b(?:test|verify|surefire:test|integration-test)\b"
+    # tempered：`-x test` 是 Gradle 的**排除** test，不能算跑测试
+    r"|(?:gradle|gradlew)\b(?:(?!-x\s)[^\n|&;]){0,200}?\b[\w:]*[Tt]est[\w:]*\b"
     r"|jest|mocha|vitest|npx\s+jest|npx\s+vitest|npx\s+mocha"
     r"|(?:npm|yarn|pnpm)\s+(?:run\s+)?test"
     r"|make\s+(?:test|check)"
+    # Django 家族：./tests/runtests.py / python tests/runtests.py / manage.py test
+    # （下方 `\./...(?:_test|test_)` 要求 test_/_test，"tests/runtests.py" 两者都不含）
+    r"|runtests\.py|manage\.py\s+test"
+    # CMake/CTest 的常见调用形式；ctest 已在上面，这里补 cmake --build --target test
+    r"|cmake\s+--build\s+\S+\s+--target\s+(?:test|check)"
+    # 多语言正式 test runner：Elixir(mix)/Swift/Clojure(lein)/.NET/Lua(busted)
+    r"|mix\s+test|swift\s+test|lein\s+test|dotnet\s+test|busted"
     r")\b"
-    r"|\.\/[^\s]*(?:_test|test_)\S*",
+    r"|\.\/[^\s]*(?:_test|test_)\S*"
+    # sbt 子项目测试（Scala）：sbt test / sbt "core/test" / sbt testOnly ...
+    r"|\bsbt\b[^\n|&;]*?\b(?:test(?:Only|Quick)?|it:test)\b"
+    # R 测试（常内联在 R -e \"...\"）：devtools::test() / testthat::test_*(...)
+    r"|\b(?:devtools::test|testthat::test)"
+    # Neovim Lua 测试：PlenaryBustedDirectory / PlenaryBustedFile
+    r"|\bPlenaryBusted\w*",
     re.IGNORECASE,
 )
 
 # --- Bash edit path extraction ---
 _WORKSPACE_PREFIXES = ("/workspace/", "/testbed/", "/repo/", "/home/swe-bench/")
-_REDIRECT_WRITE_RE = re.compile(r">>?\s*(\S+)")
-_CAT_REDIRECT_RE = re.compile(r"\bcat\s[^|]*>>?\s*(\S+)")
-_TEE_RE = re.compile(r"\btee\s+(?:-[a-zA-Z]+\s+)*(\S+)")
-_SED_INPLACE_RE = re.compile(r"\bsed\s+-i\b")
-_PATCH_FILE_RE = re.compile(r"\bpatch\s+(?:-\S+\s+)*(\S+)")
+# `cat > file` / `cat >> file`（含 heredoc 写文件）。不匹配 `cat foo 2>/dev/null`。
+_CAT_WRITE_RE = re.compile(r"\bcat\s+(?:>>?)\s*([^\s|&;<>]+)")
+# `cat inputs... > outfile`：同样排除 fd 重定向。
+_CAT_STDOUT_RE = re.compile(r"\bcat\s+(?!>>?)(?:[^|&;\n]*?)(?<![0-9&])>>?\s*([^\s|&;<>]+)")
+# `echo/printf ... > file`：重定向必须落在同一条简单命令内（中间不能有 |/&/;）。
+_ECHO_PRINTF_WRITE_RE = re.compile(
+    r"\b(?:echo|printf)\b(?:[^|&;\n]*?)(?<![0-9&])>>?\s*([^\s|&;<>]+)"
+)
+_TEE_RE = re.compile(r"\btee\s+(?:-[a-zA-Z]+\s+)*([^\s|&;<>]+)")
+# 就地编辑：GNU/BSD sed 的各种写法，以及 macOS 习惯的 gsed、Perl 的 -i。
+# 覆盖 -i / -i.bak / -pi / -pi.orig。刻意只允许纯字母的短选项簇（可带 .后缀），
+# 以免 `perl -MList::Util -e ...` 这类含 i 的模块名被当成 -i 就地编辑。
+_SED_INPLACE_RE = re.compile(
+    r"\b(?:g?sed|perl)\s+(?:-\S+\s+)*-[A-Za-z]*i[A-Za-z]*(?:\.[\w.]+)?(?=\s|$)"
+)
+# `patch` 作为命令，避免命中 `foo.patch &&` 这类扩展名。
+_PATCH_FILE_RE = re.compile(r"(?:^|[\n;&|]\s*)patch\s+(?:-\S+\s+)*([^\s|&;<>]+)")
+_SHELL_META_TOKENS = frozenset({"&&", "||", "|", ";", "&"})
+_NON_EDIT_PATH_PREFIXES = ("/dev/", "/proc/", "/sys/")
 
 # --- IAC intent keywords ---
 _INTENT_KEYWORDS = {
@@ -279,6 +538,8 @@ def _tool_call_is_execution(name_lower: str, args: dict) -> bool:
     - command 取值为编辑器子命令（view/create/str_replace/insert/undo_edit），或
       携带编辑器专属参数（old_str/new_str/file_text/view_range/insert_line）→ 文件
       查看/编辑工具，非执行类。
+    - 携带 task_list/thought/task_completed → task_tracker/think/finish，非执行类
+      （task_tracker 也有 command 参数，但取值是 plan/add 而非 shell 命令）。
     - 否则若携带非空的 shell 命令参数（command/cmd/keystrokes）→ 执行类。
     - 都不满足时回退到执行类工具名单（处理如 execute_bash 传空 command 的情况）。
     """
@@ -289,11 +550,22 @@ def _tool_call_is_execution(name_lower: str, args: dict) -> bool:
         return False
     if any(k in args for k in _EDITOR_ONLY_ARG_KEYS):
         return False
+    if any(k in args for k in _NON_EXEC_ARG_KEYS):
+        return False
     for key in _SHELL_CMD_ARG_KEYS:
         val = args.get(key)
         if isinstance(val, str) and val.strip():
             return True
     return name_lower in _EXECUTION_TOOL_NAMES
+
+
+def _exec_cmd_text(args: dict) -> str:
+    """取执行类 tool_call 的命令/代码文本（bash command / ipython code / 改名变体）。"""
+    for key in ("command", "code", "cmd", "keystrokes"):
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return ""
 
 
 def _normalize_path(p: str) -> str:
@@ -305,20 +577,45 @@ def _normalize_path(p: str) -> str:
     return posixpath.normpath(p)
 
 
+def _is_plausible_edit_path(path: str) -> bool:
+    """过滤重定向/shell 元字符等不应计入 FEC 的伪路径。"""
+    if not isinstance(path, str):
+        return False
+    p = path.strip().strip("'\"")
+    if not p or p in _SHELL_META_TOKENS:
+        return False
+    if p.startswith("<<") or p.startswith("&"):
+        return False
+    # `2>/dev/null;`、`foo;`、含重定向符的 token 都不是文件路径
+    if ">" in p or "<" in p or ";" in p or "|" in p:
+        return False
+    if re.fullmatch(r"[0-9]+", p) or re.fullmatch(r"[&|;\d<>]+", p):
+        return False
+    if "/dev/" in p or "/proc/" in p or "/sys/" in p:
+        return False
+    if any(p == pref.rstrip("/") or p.startswith(pref) for pref in _NON_EDIT_PATH_PREFIXES):
+        return False
+    return True
+
+
 def _extract_bash_edit_paths(cmd_str: str) -> list[str]:
-    """从 bash 命令字符串中提取文件编辑目标路径。"""
+    """从 bash 命令字符串中提取文件编辑目标路径。
+
+    只保留真实写文件目标，显式忽略：
+    - fd/设备重定向：`2>/dev/null`、`2>&1`、`>/dev/null`
+    - 与写操作无关、仅因命令中出现 `echo` + 别处的 `>` 而被误抓的路径
+    - `foo.patch &&` 这类扩展名误匹配
+    - `sed -i ... file && echo` 后半段的 shell 操作符/命令词
+    """
+    if not isinstance(cmd_str, str) or not cmd_str:
+        return []
+
     paths: list[str] = []
-    m = _CAT_REDIRECT_RE.search(cmd_str)
-    if m:
-        paths.append(m.group(1))
-    if not m and (">" in cmd_str):
-        if re.search(r"\b(?:echo|printf)\b", cmd_str):
-            rm = _REDIRECT_WRITE_RE.search(cmd_str)
-            if rm:
-                paths.append(rm.group(1))
-    m = _TEE_RE.search(cmd_str)
-    if m:
-        paths.append(m.group(1))
+
+    for cre in (_CAT_WRITE_RE, _CAT_STDOUT_RE, _ECHO_PRINTF_WRITE_RE, _TEE_RE, _PATCH_FILE_RE):
+        for m in cre.finditer(cmd_str):
+            paths.append(m.group(1))
+
     if _SED_INPLACE_RE.search(cmd_str):
         after_sed = _SED_INPLACE_RE.split(cmd_str, 1)[-1].strip()
         tokens = after_sed.split()
@@ -328,19 +625,42 @@ def _extract_bash_edit_paths(cmd_str: str) -> list[str]:
             if skip_next:
                 skip_next = False
                 continue
+            if tok in _SHELL_META_TOKENS or tok.startswith("&&") or tok.startswith("||"):
+                break
+            # `file 2>/dev/null` / 后续 shell 命令：停止采集，避免把重定向和命令词当路径
+            if ">" in tok or "<" in tok or ";" in tok:
+                break
             if tok.startswith("-"):
-                if tok in ("-e", "-E"):
+                if tok in ("-e", "-E", "-f"):
+                    # -e/-f 的参数就是脚本表达式本身，跳过它并标记表达式已消耗，
+                    # 否则后面的真实文件名会被当成表达式吃掉（perl -pi -e '...' f）
                     skip_next = True
+                    in_expr = True
                 continue
-            if not in_expr and (tok.startswith("'") or tok.startswith('"') or tok.startswith("s")):
+            if not in_expr and (
+                tok.startswith("'") or tok.startswith('"') or tok.startswith("s") or tok.startswith("/")
+            ):
                 in_expr = True
                 continue
             if in_expr:
-                paths.append(tok)
-    m = _PATCH_FILE_RE.search(cmd_str)
-    if m:
-        paths.append(m.group(1))
-    return paths
+                if not _is_plausible_edit_path(tok):
+                    break
+                paths.append(tok.strip("'\""))
+
+    return [p for p in paths if _is_plausible_edit_path(p)]
+
+
+def _exec_bash_edit_paths(name_lower: str, args: dict) -> list[str]:
+    """执行类 tool_call 的命令文本中包含的文件编辑目标路径（未归一化）。
+
+    单一入口，供所有需要「这个 tool_call 是否通过 shell 改了文件」的地方复用，必须走
+    _tool_call_is_execution / _exec_cmd_text 而非工具名单 + args["command"]。否则改名
+    shell 工具、参数键为 code/keystrokes 的工具，其 bash 编辑会被整体漏掉，使 DPI 误判
+    「从未成功写入」、SCP 判 0 —— 同一条轨迹仅因工具改名就换一个分数。
+    """
+    if not _tool_call_is_execution(name_lower, args):
+        return []
+    return _extract_bash_edit_paths(_exec_cmd_text(args))
 
 
 def _count_assistant_turns(messages: list[dict]) -> int:
@@ -472,7 +792,7 @@ def _extract_observations(
 # Error detection
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _is_error_result(content: str, is_test_output: bool = False, is_execution: bool = True) -> bool:
+def _is_error_result(content: Any, is_test_output: bool = False, is_execution: bool = True) -> bool:
     """检测 observation 是否包含错误信息。
 
     判定分两层：
@@ -485,10 +805,15 @@ def _is_error_result(content: str, is_test_output: bool = False, is_execution: b
 
     is_execution 默认 True 以保持旧调用点行为；逐 observation 的判定（_is_obs_error /
     _count_tool_call_errors）会按产生该 observation 的工具传入正确的值。
+
+    文本先经 _scan_window 归一：剥离 ANSI、并同时取输出的开头与结尾（结论性信息
+    通常在末尾）。
     """
     if not content:
         return False
-    text = content[:_ERROR_SCAN_LIMIT]
+    text = _scan_window(content)
+    if not text:
+        return False
     for pat in _TOOL_ERROR_MARKERS:
         if pat.search(text):
             return True
@@ -511,14 +836,17 @@ def _is_test_running_turn(msg: dict, scaffold: str) -> bool:
         if parsed is None:
             return False
         for cmd in parsed.get("commands", []) or []:
-            if isinstance(cmd, dict) and _TEST_RUN_RE.search(cmd.get("keystrokes", "")):
+            if isinstance(cmd, dict) and _is_formal_test_run_cmd(cmd.get("keystrokes", "")):
                 return True
         return False
 
     for tc in msg.get("tool_calls", []) or []:
         name_lower, args = _parse_tool_call(tc)
-        if name_lower in _BASH_TOOL_NAMES:
-            if _TEST_RUN_RE.search(args.get("command", "")):
+        # 以参数判别执行类工具（与 _extract_observations / _is_obs_error 一致）。
+        # 漏判的后果是双重的：SUB 的 late-test bonus 拿不到，且该输出不被识别为
+        # test output，于是正常的测试失败被计成 tool call 错误，连带压低 SUB 与 DPI。
+        if _tool_call_is_execution(name_lower, args):
+            if _is_formal_test_run_cmd(_exec_cmd_text(args)):
                 return True
     return False
 
@@ -529,8 +857,8 @@ def _get_per_toolcall_test_flags(msg: dict) -> list[bool]:
     for tc in msg.get("tool_calls", []) or []:
         name_lower, args = _parse_tool_call(tc)
         is_test = False
-        if name_lower in _BASH_TOOL_NAMES:
-            is_test = bool(_TEST_RUN_RE.search(args.get("command", "")))
+        if _tool_call_is_execution(name_lower, args):
+            is_test = _is_formal_test_run_cmd(_exec_cmd_text(args))
         flags.append(is_test)
     return flags
 
@@ -593,6 +921,10 @@ def _classify_action(name_lower: str, args: dict) -> str:
         if cmd in _EDITOR_WRITE_COMMANDS:
             return "write"
         return "read"
+    # 改名的 shell/ipython 工具：按参数特征兜底判为 bash，否则 IAC/TTE/PED 会把
+    # 整条轨迹的执行动作全归到 "other"。
+    if _tool_call_is_execution(name_lower, args):
+        return "bash"
     return "other"
 
 
@@ -620,10 +952,8 @@ def _action_target_files(a: dict, messages: list[dict]) -> set[str]:
                 path = _get_file_path(args)
                 if path:
                     files.add(_normalize_path(path))
-                if name_lower in _BASH_TOOL_NAMES:
-                    cmd = args.get("command", "")
-                    for p in _extract_bash_edit_paths(cmd):
-                        files.add(_normalize_path(p))
+                for p in _exec_bash_edit_paths(name_lower, args):
+                    files.add(_normalize_path(p))
                 break
     elif msg.get("role") == "assistant":
         parsed = _parse_t2_assistant(msg)
@@ -743,9 +1073,7 @@ def _has_successful_write(messages: list[dict], observations: list[dict], scaffo
                 continue
             for i, tc in enumerate(msg.get("tool_calls", []) or []):
                 name_lower, args = _parse_tool_call(tc)
-                if _is_write_operation(name_lower, args) or (
-                    name_lower in _BASH_TOOL_NAMES and _extract_bash_edit_paths(args.get("command", ""))
-                ):
+                if _is_write_operation(name_lower, args) or _exec_bash_edit_paths(name_lower, args):
                     obs_list = obs_by_assistant.get(idx, [])
                     if i < len(obs_list):
                         obs = obs_list[i]
@@ -791,25 +1119,75 @@ def _is_truncated(messages: list[dict], scaffold: str) -> bool:
     return True
 
 
+def _loop_signature_for_action(
+    a: dict,
+    messages: list[dict],
+    occurrence_in_msg: int,
+) -> tuple[str, str, str] | None:
+    """构造 DPI loop 检测用的 action 签名。
+
+    返回 (tool_name, editor_subcommand, target_path)；无明确 target 时返回 None。
+
+    对 file_editor / str_replace_editor，签名必须带上 command（view/str_replace/...），
+    否则同文件上的「查看→编辑」正常迭代会被误判成死循环。
+    """
+    tool_name = a["tool_name"].lower()
+    msg = messages[a["msg_idx"]]
+
+    if msg.get("role") == "assistant" and msg.get("tool_calls"):
+        match_i = 0
+        for tc in msg.get("tool_calls", []) or []:
+            name_lower, args = _parse_tool_call(tc)
+            if name_lower != tool_name:
+                continue
+            if match_i != occurrence_in_msg:
+                match_i += 1
+                continue
+
+            target = ""
+            path = _get_file_path(args)
+            if path:
+                target = _normalize_path(path)
+            else:
+                edit_paths = _exec_bash_edit_paths(name_lower, args)
+                if edit_paths:
+                    target = _normalize_path(edit_paths[0])
+            if not target:
+                return None
+
+            subcmd = ""
+            if name_lower in _MULTI_EDITOR_TOOL_NAMES:
+                subcmd = str(args.get("command", "") or "")
+            return (tool_name, subcmd, target)
+
+        return None
+
+    # Terminus2 / 无 tool_calls：退化为 target-only 签名
+    files = _action_target_files(a, messages)
+    if not files:
+        return None
+    return (tool_name, "", sorted(files)[0])
+
+
 def _compute_loop_fraction(actions: list[dict], messages: list[dict], scaffold: str) -> float:
     """计算连续重复步骤占比。
 
-    只有 tool+target 都相同且 target 非空的连续 run 才计为 loop。
-    bash/terminal 无明确 target 时不参与 loop 检测（连续执行命令是正常行为）。
+    只有签名完全相同且 target 非空的连续 run 才计为 loop。
+    签名为 (tool_name, editor_subcommand, target)：
+      - file_editor/str_replace_editor 带上 view/str_replace 等子命令，避免把
+        同文件上的查看+编辑迭代误判为循环
+      - bash/terminal 无明确 target 时不参与（连续执行命令是正常行为）
     """
     if len(actions) < _LOOP_RUN_MIN_LEN:
         return 0.0
 
-    signatures = []
+    signatures: list[tuple[str, str, str] | None] = []
+    seen_counts: dict[tuple[int, str], int] = {}
     for a in actions:
-        tool_name = a["tool_name"].lower()
-        files = _action_target_files(a, messages)
-        target = sorted(files)[0] if files else ""
-        # 无明确 target 的 action 用 None 标记，不参与 loop 匹配
-        if not target:
-            signatures.append(None)
-        else:
-            signatures.append((tool_name, target))
+        key = (a["msg_idx"], a["tool_name"].lower())
+        occ = seen_counts.get(key, 0)
+        seen_counts[key] = occ + 1
+        signatures.append(_loop_signature_for_action(a, messages, occ))
 
     loop_steps = 0
     i = 0
@@ -842,8 +1220,9 @@ def _compute_error_repeat_rate(observations: list[dict], messages: list[dict], s
         is_err = _is_obs_error(obs, messages, scaffold, _test_flags_cache)
         if is_err:
             error_count += 1
-            content = obs.get("content", "")[:80]
-            sig = content
+            # 先剥 ANSI 再取签名：同一条错误在不同轮次可能带不同的控制序列，不归一
+            # 会让重复错误看起来各不相同。_text_of 兼容 list 型 content。
+            sig = _strip_ansi(_text_of(obs.get("content", "")))[:80]
             if prev_is_error and sig == prev_signature:
                 repeat_pairs += 1
             prev_signature = sig
@@ -953,9 +1332,8 @@ def _per_step_target_files(messages: list[dict], scaffold: str) -> list[set[str]
                 path = _get_file_path(args)
                 if path:
                     files.add(_normalize_path(path))
-                if name_lower in _BASH_TOOL_NAMES:
-                    for p in _extract_bash_edit_paths(args.get("command", "")):
-                        files.add(_normalize_path(p))
+                for p in _exec_bash_edit_paths(name_lower, args):
+                    files.add(_normalize_path(p))
         per_step.append(files)
     return per_step
 
@@ -1046,9 +1424,7 @@ def _first_successful_write_turn(messages: list[dict], observations: list[dict],
         else:
             for i, tc in enumerate(msg.get("tool_calls", []) or []):
                 name_lower, args = _parse_tool_call(tc)
-                if _is_write_operation(name_lower, args) or (
-                    name_lower in _BASH_TOOL_NAMES and _extract_bash_edit_paths(args.get("command", ""))
-                ):
+                if _is_write_operation(name_lower, args) or _exec_bash_edit_paths(name_lower, args):
                     obs_list = obs_by_assistant.get(idx, [])
                     if i < len(obs_list):
                         if not _is_obs_error(obs_list[i], messages, scaffold, _test_flags_cache):
@@ -1074,10 +1450,57 @@ def _compute_scp(messages: list[dict], observations: list[dict], scaffold: str) 
 # 8. SUB — 提交完整性 (from v5 D1, r=0.33 with resolved)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 文本收尾的「完成信号」：部分脚手架/模型会以一段文字总结收尾而不调 finish 工具。
+# 若该文字明确宣告任务完成（强信号）或含完成类动词（弱信号），视为正常收尾而非半成品，
+# 避免把「已修复 + tests passed，只是没发 finish」一刀切判 0.5。
+_SUB_COMPLETION_STRONG_RE = re.compile(
+    r"\b(?:"
+    r"(?:fix|task|issue|bug|change|patch)\s+(?:is\s+)?(?:complete|completed|fixed|resolved|done|verified|ready)"
+    r"|(?:all\s+)?tests?\s+(?:now\s+)?pass(?:ed|ing)?"
+    r"|successfully\s+(?:fixed|resolved|implemented|verified|applied)"
+    r"|(?:the\s+)?(?:fix|patch|implementation)\s+(?:is\s+)?(?:complete|ready|working)"
+    r")\b",
+    re.IGNORECASE,
+)
+_SUB_COMPLETION_WEAK_RE = re.compile(
+    r"\b(?:complete|completed|fixed|done|resolved|verified)\b",
+    re.IGNORECASE,
+)
+
+
+def _assistant_text_content(message: dict[str, Any]) -> str:
+    """取 assistant 消息的纯文本内容（兼容 str 与 content-block 列表两种格式）。"""
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("text") is not None:
+                parts.append(str(block["text"]))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _text_summary_sub_base(content: str) -> float:
+    """给「以文本总结收尾、未调 finish 工具」的末轮打 base 分。
+
+    强完成信号=1.0, 弱完成信号=0.8, 其它文本=0.5（与旧版半成品同分）。
+    """
+    text = content.strip()
+    if not text:
+        return 0.5
+    if _SUB_COMPLETION_STRONG_RE.search(text):
+        return 1.0
+    if _SUB_COMPLETION_WEAK_RE.search(text):
+        return 0.8
+    return 0.5
+
+
 def _compute_sub(messages: list[dict], observations: list[dict], scaffold: str) -> float:
     """提交完整性 + 最终状态质量。
 
-    Base: 正常提交=1.0, 截断=0.0, 半成品=0.5
+    Base: finish 工具=1.0, 文本总结(含完成信号)=0.8-1.0, 其它文本=0.5, 截断=0.0
     Penalty: finish without any successful write = 0.3 (premature finish)
     Modifiers: late test execution, low late-error rate.
     """
@@ -1103,7 +1526,7 @@ def _compute_sub(messages: list[dict], observations: list[dict], scaffold: str) 
                 break
         if base == 0.0:
             if last_msg.get("role") == "assistant" and not (last_msg.get("tool_calls") or []):
-                base = 0.5
+                base = _text_summary_sub_base(_assistant_text_content(last_msg))
     elif scaffold == "terminus2":
         parsed = _parse_t2_assistant(last_assistant)
         if parsed is not None and parsed.get("task_complete") is True:
@@ -1174,21 +1597,27 @@ def _extract_edit_paths(messages: list[dict], scaffold: str) -> list[str]:
                     path = _get_file_path(args)
                     if path:
                         paths.append(_normalize_path(path))
-                elif name_lower in _BASH_TOOL_NAMES:
-                    cmd_str = args.get("command", "")
-                    paths.extend(_normalize_path(p) for p in _extract_bash_edit_paths(cmd_str))
+                else:
+                    # 与 TVR / DPI / SCP / 错误检测共用 _exec_bash_edit_paths：
+                    # 执行类判别以参数为准而非工具名单。
+                    paths.extend(_normalize_path(p) for p in _exec_bash_edit_paths(name_lower, args))
     return paths
 
 
-def _compute_fec(messages: list[dict], scaffold: str) -> float:
-    """文件编辑集中度: 1 - clip((mean_edits - 1) / 4, 0, 1)。"""
+def _compute_fec(messages: list[dict], scaffold: str) -> float | None:
+    """文件编辑集中度: 1 - clip((mean_edits - 1) / 4, 0, 1)。
+
+    没有检测到任何编辑时返回 None（fail-soft，聚合时跳过），**不能返回 1.0** ——
+    那等于把「检测盲区」和「完美的编辑集中度」判成同一件事；聚合层还要对 FEC 取
+    5 次幂（3 次同文件编辑只剩 0.031），漏抓反而成了加分项。
+    """
     paths = _extract_edit_paths(messages, scaffold)
     if not paths:
-        return 1.0
+        return None
     file_counts = Counter(paths)
     unique_files = len(file_counts)
     if unique_files == 0:
-        return 1.0
+        return None
     mean_edits = len(paths) / unique_files
     normalized = max(0.0, min((mean_edits - 1) / (_FEC_THRESHOLD - 1), 1.0))
     return 1.0 - normalized
@@ -1198,8 +1627,9 @@ def _compute_fec(messages: list[dict], scaffold: str) -> float:
 # 10. STP — 步数效率 (r=-0.21 with resolved: fewer steps = better)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_STP_OPTIMAL_RANGE = (5, 30)
-_STP_MAX_STEPS = 90
+# 与当前 agent max_turn=200 对齐：满分落到中短轨迹，打满 turn cap 得 0。
+_STP_OPTIMAL_RANGE = (5, 80)
+_STP_MAX_STEPS = 200
 
 
 def _compute_stp(messages: list[dict]) -> float:
@@ -1226,37 +1656,232 @@ def _compute_stp(messages: list[dict]) -> float:
 # 11. TVR — 测试验证 (test writing + running correlates with success)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 代码文件后缀（多语言测试/复现文件判定共用）。
+_CODE_EXT = (
+    r"(?:py|js|jsx|ts|tsx|mjs|cjs|go|rs|java|kt|kts|scala|rb|php|cc|cpp|cxx|cu|"
+    r"c|h|hpp|hxx|cs|swift|mm|pl|pm|ex|exs|lua|cljc|cljs|clj|edn|dart|sol|jl|"
+    r"erl|groovy|r|sh)"
+)
+
+# 正式测试文件（多语言）。覆盖 test_x / x_test / x_spec / x.test.x、Java/Kotlin/Scala
+# 的 *Test(s)/*IT、C/C++ 的 *_test.cc 等，以及 tests//__tests__//spec/ 目录下的代码文件。
 _TEST_FILE_RE = re.compile(
     r"(?:^|/)(?:"
-    r"test_[^/]+\.py|[^/]+_test\.py|tests/[^/]+\.py|conftest\.py"
-    r"|[^/]+_test\.go|tests/[^/]+\.rs|test_[^/]+\.rs"
-    r"|[^/]+Tests?\.java|[^/]+IT\.java"
-    r"|[^/]+\.(?:test|spec)\.(?:js|ts|jsx|tsx|mjs|cjs)"
-    r")$",
+    r"conftest\.py"
+    rf"|test_[^/]+\.{_CODE_EXT}"
+    rf"|[^/]+_tests?\.{_CODE_EXT}"
+    rf"|[^/]+_spec\.{_CODE_EXT}"
+    r"|[^/]+\.(?:test|spec)\.(?:m?[jt]sx?|cjs)"
+    # *Test/*Tests/*Spec 类命名（Java/Kotlin/Scala/PHP/C#/C++/Go/Swift/Dart）。
+    # 必须用 (?-i:) 关掉本正则的 IGNORECASE 并要求 CamelCase —— 这类命名的判据本就是
+    # 大小写；大小写不敏感时 `latest.py`/`greatest.go`/`contest.js`/`attest.go`
+    # 都会因为词尾恰好是 "test" 而被误判成测试文件。
+    rf"|[^/]*(?-i:[A-Z]\w*(?:Tests?|Spec))\.{_CODE_EXT}|[^/]+IT\.java"
+    r")$"
+    rf"|(?:^|/)(?:tests?|__tests__|specs?|testing)/(?:[^/]+/)*[^/]+\.{_CODE_EXT}$"
+    # Perl 的 t/ 目录
+    r"|(?:^|/)t/(?:[^/]+/)*[^/]+\.t$"
+    # Java/Kotlin/Scala 的 Maven/Gradle 标准测试目录 src/test/...
+    rf"|(?:^|/)src/(?:test|integrationTest|androidTest)/(?:[^/]+/)*[^/]+\.{_CODE_EXT}$",
     re.IGNORECASE,
 )
 
 
 # --- TVR-only verification idioms ---
-# SWE-agent 轨迹常用「写 reproduce/verify 脚本 + python -c 内联自测」来验证，
-# 而非正式 test runner。这些信号只用于 TVR，不进入错误抑制路径（_TEST_RUN_RE），
-# 以免一个真正报错的 `python -c` traceback 被当成测试输出而在 DPI/错误率中被吞掉。
+# SWE-agent 轨迹常用「写 reproduce/verify 脚本 + 内联自测」来验证，而非正式 test
+# runner，且这些仓库可能是任意语言（JS/TS/C++/Go/Rust/PHP/Ruby...）。这些信号只用于
+# TVR，不进入错误抑制路径（_TEST_RUN_RE），以免一个真正报错的内联 traceback 被当成
+# 测试输出而在 DPI/错误率中被吞掉。
 _TVR_VERIFY_RE = re.compile(
-    r"\bpython3?\s+-c\b"                                              # 内联执行自测
-    r"|\bpython3?\s+(?:-\S+\s+)*\S*"
-    r"(?:reproduce|repro|verify|smoke|check)\S*\.py\b"                # 跑 reproduce/verify 脚本
-    r"|\bpython3?\s+(?:-\S+\s+)*(?:\S*/)?(?:test_\S+|\S+_test)\.py\b",  # 直接跑 test_*.py / *_test.py
+    # 复现/验证脚本（任意语言、任意后缀），如 reproduce_bug.js / verify.cpp / repro.go
+    rf"(?:^|[\s/])\S*(?:reproduce|repro|verify|smoke)\w*\.{_CODE_EXT}\b"
+    # Python 内联自测 / 跑 test_ 脚本
+    r"|\bpython3?\s+-c\b"
+    r"|\bpython3?\s+(?:-\S+\s+)*(?:\S*/)?(?:test_\S+|\S+_test)\.py\b"
+    # 跑普通脚本（非 test 命名）也算验证信号 —— 这是本模块**有意**的设计口径：
+    # 编译/解释型语言下「跑一遍看会不会崩」就是 agent 的复现验证方式。该口径必须对
+    # 所有语言一致落实（含 Python / Node），否则同一条规则会产生跨语言偏差。
+    # 明显属于构建/安装的调用由下方 _TVR_NONVERIFY_RE 统一剔除。
+    r"|\bpython3?\s+(?:-\S+\s+)*(?:\S*/)?\S+\.py\b"
+    r"|\b(?:node|bun|deno)\s+(?:-\S+\s+)*(?:\S*/)?\S+\.(?:m?[jt]sx?|cjs)\b"
+    # JS/TS：node -e 内联；跑 reproduce/verify/smoke 或 test/spec 命名脚本。
+    r"|\b(?:node|deno)\s+(?:-e|--eval|eval)\b"
+    r"|\b(?:node|npx|deno|bun|ts-node|tsx)\s+(?:-\S+\s+)*\S*(?:repro|verify|smoke|test|spec)\S*\.(?:m?[jt]sx?|cjs)\b"
+    # 其它解释器内联与跑脚本
+    r"|\b(?:ruby|perl)\s+-e\b|\bphp\s+-r\b"
+    r"|\b(?:ruby|php|perl|Rscript)\s+(?:-\S+\s+)*\S+\.\w+\b"
+    # R 内联自测：R -e / Rscript -e（含 devtools::test / testthat 复现）
+    r"|\bR(?:script)?\b\s+(?:--\S+\s+)*-e\b"
+    # 编译/解释型语言运行：go run / cargo run|test / swift run / dotnet run
+    r"|\bgo\s+run\b|\bcargo\s+(?:test|run)\b|\bswift\s+run\b|\bdotnet\s+run\b"
+    # Elixir：mix run / elixir|iex 跑 .ex(s) 脚本
+    r"|\bmix\s+run\b|\b(?:elixir|iex)\s+(?:-\S+\s+)*\S+\.exs?\b"
+    # Clojure：lein run / clj|clojure -e|-M|-X 内联
+    r"|\blein\s+run\b|\b(?:clj|clojure)\s+(?:-\S+\s+)*-[eMX]\S*"
+    # Java：跑 jar 或临时复现类（首字母大写的 main 类，大小写敏感避免误吞 -version）
+    r"|\bjava\b[^\n|&;]*?(?:-jar\s+\S+|\b(?-i:[A-Z])\w+)\b"
+    # Neovim Lua：nvim --headless 执行 dofile('test_*/repro/verify') 复现脚本
+    r"|dofile\(\s*['\"][^'\"]*(?:test|repro|verify|spec)"
+    # 构建系统 test runner（补 _TEST_RUN_RE 未含的）
+    r"|\b(?:bazel|blaze)\s+test\b|\bdotnet\s+test\b|\bphpunit\b|\brspec\b|\btox\b"
+    # 跑编译产物 / 测试脚本：./repro  ./a.out  ./run_tests.sh  ./x_test
+    r"|\./\S*(?:_test|test_|repro|verify|smoke)\S*"
+    r"|\./\S+\.(?:sh|out|bin|exe)\b",
+    re.IGNORECASE,
+)
+# 明确**不是**验证行为的命令：依赖安装、打包、起开发服务器、脚手架生成。
+# 这些既不是跑测试也不是「跑一遍程序看会不会崩」，不应计入 TVR 的 has_test_run。
+# 注意：`./build.sh` / `go run` / `cargo run` 一类仍按既定设计口径计为验证信号。
+_TVR_NONVERIFY_RE = re.compile(
+    r"\b(?:pip3?|uv\s+pip|conda|apt|apt-get|yum|brew)\s+install\b"
+    r"|\b(?:npm|yarn|pnpm)\s+(?:install|i|ci|add)\b"
+    r"|\bpython3?\s+(?:\S*/)?setup\.py\s+(?:install|build|develop|egg_info|sdist|bdist\w*)\b"
+    r"|\bmanage\.py\s+(?:runserver|migrate|makemigrations|collectstatic|shell|startapp|startproject)\b"
+    r"|\b(?:npm|yarn|pnpm)\s+(?:run\s+)?(?:dev|start|build|watch|serve|lint|format)\b"
+    r"|\bcargo\s+(?:build|check|fmt|clippy|install)\b"
+    r"|\bgo\s+(?:build|install|mod|vet|fmt)\b"
+    # `python -c` 被 agent 大量用来**改文件**（open(...,'w')/.write()），而非内联自测。
+    # 这类是编辑操作，不该计入 has_test_run。
+    r"|\bpython3?\s+-c\b[\s\S]*?(?:open\s*\([^)]*['\"][wa]b?\+?['\"]|\.write\s*\()",
     re.IGNORECASE,
 )
 _TVR_REPRO_FILE_RE = re.compile(
-    r"(?:^|/)\S*(?:reproduce|repro|verify|smoke)\S*\.py$",
+    r"(?:^|/)\S*(?:reproduce|repro|verify|smoke)\S*\.\w+$",
     re.IGNORECASE,
 )
 
 
+# late_test_success 的三档取值，见 _compute_tvr 文档。
+_LATE_TEST_SCORE = {"pass": 1.0, "unknown": 0.6, "fail": 0.3}
+
+
+# 只做读取/搬运、绝不构成「跑测试」的命令头。段首是这些词时整段跳过 —— 否则
+# `git diff .../src/main/java/Foo.java` 会因路径里的 "java" 命中 java 运行分支，
+# `rm -f vitest-tmp.config.ts` 会因文件名命中 vitest，`grep -n "go test" x` 会自命中。
+_NONRUN_CMD_HEADS = frozenset({
+    "rm", "ls", "cat", "grep", "egrep", "fgrep", "rg", "ag", "find", "git", "echo",
+    "mkdir", "rmdir", "cp", "mv", "touch", "head", "tail", "wc", "sed", "awk",
+    "diff", "which", "whereis", "chmod", "chown", "cd", "sort", "uniq", "xargs",
+    "export", "printf", "tree", "stat", "du", "df", "ln", "tar", "unzip", "gzip",
+    "curl", "wget", "pwd", "env", "true", "false", "sleep", "kill", "ps",
+})
+
+# 段首可跳过的包装器；timeout 还要再吃掉一个时长参数。
+_CMD_WRAPPERS = frozenset({"sudo", "env", "time", "nohup", "exec", "timeout", "stdbuf"})
+_ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=\S*\Z")
+_DURATION_RE = re.compile(r"[\d.]+[smhd]?\Z")
+
+
+def _split_shell_segments(cmd: str) -> list[str]:
+    """把 shell 命令链拆成简单命令片段（用于逐段判定，避免整串误判）。
+
+    命令多为 `cd <dir> && <runner> ... | tail -40; echo ...` 这类复合形式，整串匹配会让
+    `pip install && pytest` 里的 install 段和 test 段互相污染。
+
+    分隔符必须在**引号之外**才算数，且刻意不按换行拆：多行的
+    `python3 -c "p='x'; open(p,'w').write(s)"` 若按裸正则拆，脚本正文里的 `;` 会把
+    一条命令切成几段，导致针对整段正文的判定（如「这个 python -c 其实是在改文件」）
+    全部失效。
+
+    已知代价：多行命令的段首若是只读命令（如 heredoc 写文件的 `cat`），其后另起一行
+    的真实执行命令会被一并跳过。
+    """
+    segs: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    i, n = 0, len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if quote is not None:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                buf.append(cmd[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            buf.append(ch)
+            buf.append(cmd[i + 1])
+            i += 2
+            continue
+        if cmd.startswith("&&", i) or cmd.startswith("||", i):
+            segs.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        if ch in ";|&":
+            segs.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    segs.append("".join(buf))
+    return [s for s in segs if s.strip()]
+
+
+def _segment_head(seg: str) -> str:
+    """取一个命令段的实际命令词（跳过前置环境变量赋值与 sudo/timeout 等包装器）。"""
+    toks = seg.strip().split()
+    i = 0
+    while i < len(toks) and _ENV_ASSIGN_RE.match(toks[i]):
+        i += 1
+    while i < len(toks) and toks[i] in _CMD_WRAPPERS:
+        wrapper = toks[i]
+        i += 1
+        if wrapper == "timeout":
+            while i < len(toks) and toks[i].startswith("-"):
+                i += 1
+            if i < len(toks) and _DURATION_RE.match(toks[i]):
+                i += 1
+    if i >= len(toks):
+        return ""
+    head = toks[i]
+    # 去掉路径前缀：/opt/venv/bin/python -> python，./node_modules/.bin/jest -> jest
+    return head.rsplit("/", 1)[-1]
+
+
+def _iter_run_segments(cmd: str):
+    """逐段产出「可能真的在执行什么」的命令段（已排除纯读取/搬运类命令头）。"""
+    for seg in _split_shell_segments(cmd):
+        if _segment_head(seg) in _NONRUN_CMD_HEADS:
+            continue
+        yield seg
+
+
+def _is_formal_test_run_cmd(cmd: str) -> bool:
+    """严格口径：是否调用了正式 test runner（pytest/go test/cargo test/mvn test/...）。
+
+    用于错误抑制路径（哪些 observation 属于「测试输出」）。逐段判定，避免
+    `rm -f vitest-tmp.config.ts`、`grep "go test"` 这类文件名/字面量误命中。
+    """
+    if not cmd:
+        return False
+    return any(_TEST_RUN_RE.search(seg) for seg in _iter_run_segments(cmd))
+
+
 def _is_test_run_cmd(cmd: str) -> bool:
-    """TVR 口径的测试执行判定：正式 runner 或 reproduce/inline 自测。"""
-    return bool(_TEST_RUN_RE.search(cmd) or _TVR_VERIFY_RE.search(cmd))
+    """TVR 口径的测试执行判定：正式 runner 或 reproduce/inline 自测。
+
+    逐段判定并排除安装/打包/起服务（见 _TVR_NONVERIFY_RE），否则
+    `python setup.py build`、`npm run dev` 会被当成验证。
+    """
+    if not cmd:
+        return False
+    for seg in _iter_run_segments(cmd):
+        if _TVR_NONVERIFY_RE.search(seg):
+            continue
+        if _TEST_RUN_RE.search(seg) or _TVR_VERIFY_RE.search(seg):
+            return True
+    return False
 
 
 def _is_test_file_path(path: str) -> bool:
@@ -1270,7 +1895,15 @@ def _compute_tvr(messages: list[dict], scaffold: str) -> float:
     """测试验证: 综合测试写入、执行次数和最终测试通过信号。
 
     0.3 * has_test_write + 0.3 * has_test_run + 0.4 * late_test_success
-    late_test_success: 最后一次测试执行的 observation 不含错误
+
+    late_test_success 由 _test_run_outcome 对**最后一次测试执行**的 observation 判定：
+
+        pass    -> 1.0   输出里有明确的通过摘要
+        unknown -> 0.6   跑了测试但输出看不出结论（常见于 `| tail -5` 只截了几行）
+        fail    -> 0.3   有明确失败信号
+
+    unknown 档是必要的：把「看不出结论」等同于「通过」，会让失败识别覆盖不到的语言
+    系统性地被判成通过。单列一档后，「检测不到」不再等价于「满分」。
     """
     has_test_write = False
     test_run_count = 0
@@ -1289,49 +1922,119 @@ def _compute_tvr(messages: list[dict], scaffold: str) -> float:
                 ks = cmd.get("keystrokes", "")
                 if _is_test_run_cmd(ks):
                     test_run_count += 1
-                    # Find next user msg as observation
+                    # Find next user msg as observation。找不到时必须重置为 -1，
+                    # 否则会沿用上一次测试的 observation（截断轨迹里最后一次测试
+                    # 往往正是失败的那次，沿用旧值会系统性偏乐观）。
+                    found = -1
                     for j in range(idx + 1, len(messages)):
                         if messages[j].get("role") == "user":
-                            last_test_obs_idx = j
+                            found = j
                             break
+                    last_test_obs_idx = found
                 for edited_path in _extract_bash_edit_paths(ks):
                     if _is_test_file_path(edited_path):
                         has_test_write = True
         else:
             for tc_idx, tc in enumerate(msg.get("tool_calls", []) or []):
                 name_lower, args = _parse_tool_call(tc)
+                # 写测试文件：编辑器写操作
                 if _is_write_operation(name_lower, args):
-                    path = _get_file_path(args)
-                    if _is_test_file_path(path):
+                    if _is_test_file_path(_get_file_path(args)):
                         has_test_write = True
-                if name_lower in _BASH_TOOL_NAMES:
-                    cmd = args.get("command", "")
+                # 执行类工具（bash/ipython/改名变体，以参数为准）：跑测试，或用
+                # heredoc/重定向写出（多语言）reproduce 脚本。
+                if _tool_call_is_execution(name_lower, args):
+                    cmd = _exec_cmd_text(args)
+                    for edited_path in _extract_bash_edit_paths(cmd):
+                        if _is_test_file_path(edited_path):
+                            has_test_write = True
                     if _is_test_run_cmd(cmd):
                         test_run_count += 1
-                        # Find corresponding tool response
+                        # Find corresponding tool response。同样地，找不到对应
+                        # observation（并行 tool_call 未全返回 / 轨迹被截断）时重置
+                        # 为 -1，不沿用上一次测试的结果。
+                        found = -1
                         tool_count = 0
                         for j in range(idx + 1, len(messages)):
                             if messages[j].get("role") == "tool":
                                 if tool_count == tc_idx:
-                                    last_test_obs_idx = j
+                                    found = j
                                     break
                                 tool_count += 1
                             elif messages[j].get("role") == "assistant":
                                 break
+                        last_test_obs_idx = found
 
     has_test_run = test_run_count > 0
-    # Late test success: last test observation doesn't contain errors
+    # Late test success: 最后一次测试执行的结论（pass / unknown / fail）
     late_test_success = 0.0
     if last_test_obs_idx >= 0:
-        content = messages[last_test_obs_idx].get("content", "")
-        if not _is_error_result(content, is_test_output=False):
-            late_test_success = 1.0
-        else:
-            late_test_success = 0.3  # ran tests but they failed
+        outcome = _test_run_outcome(messages[last_test_obs_idx].get("content", ""))
+        late_test_success = _LATE_TEST_SCORE[outcome]
+    elif has_test_run:
+        # 跑了测试但拿不到对应 observation：按无结论处理，而非满分
+        late_test_success = _LATE_TEST_SCORE["unknown"]
 
     return (0.3 * float(has_test_write)
             + 0.3 * float(has_test_run)
             + 0.4 * late_test_success)
+
+
+def _compute_reproduce_first(messages: list[dict], scaffold: str) -> float | None:
+    """诊断: 是否在「首次编辑非测试源文件」之前先跑过测试/复现。
+
+    对应 SWE bugfix 工作流的 Phase 4（写复现/跑测试）应先于 Phase 6（改源码）。
+
+    返回:
+        1.0  — 先跑测试/复现，再改源码 (reproduced-first，理想)
+        0.0  — 改了源码但未先复现 (先改后验，或全程没跑测试)
+        None — 全程没编辑任何非测试源文件 (不计入"先复现率"分母)
+
+    因此数据集级「先复现率」= 非 None 取值的均值（自动排除 no_src_edit）。
+    测试执行涵盖正式 runner、reproduce/verify 脚本、`python -c` / `node -e` / `go run`
+    等多语言内联自测（见 _is_test_run_cmd），并以工具调用参数判定执行类工具
+    （见 _tool_call_is_execution），对脚手架改名鲁棒。这是纯诊断字段，不计入
+    composite_score。
+    """
+    first_fix: int | None = None   # 首次编辑非测试源文件的动作序号
+    first_test: int | None = None  # 首次跑测试/复现的动作序号
+    act = 0                        # 单调递增的动作序号
+
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        if scaffold == "terminus2":
+            parsed = _parse_t2_assistant(msg)
+            if parsed is None:
+                continue
+            for cmd in parsed.get("commands", []) or []:
+                if not isinstance(cmd, dict):
+                    continue
+                ks = cmd.get("keystrokes", "")
+                if first_test is None and _is_test_run_cmd(ks):
+                    first_test = act
+                if first_fix is None:
+                    for ep in _extract_bash_edit_paths(ks):
+                        if ep and not _is_test_file_path(ep):
+                            first_fix = act
+                            break
+                act += 1
+            continue
+
+        for tc in msg.get("tool_calls", []) or []:
+            name_lower, args = _parse_tool_call(tc)
+            if _tool_call_is_execution(name_lower, args):
+                if first_test is None and _is_test_run_cmd(_exec_cmd_text(args)):
+                    first_test = act
+            if _is_write_operation(name_lower, args):
+                path = _get_file_path(args)
+                if first_fix is None and path and not _is_test_file_path(path):
+                    first_fix = act
+            act += 1
+
+    if first_fix is None:
+        return None
+    return 1.0 if (first_test is not None and first_test < first_fix) else 0.0
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1548,6 +2251,8 @@ def score_record(
         "tvr": _compute_tvr(messages, scaffold),
     }
     composite = _aggregate_tqs(components)
+    # 纯诊断字段（不计入 composite）：先复现率 (Phase4 先于 Phase6)。
+    reproduce_first = _compute_reproduce_first(messages, scaffold)
 
     return {
         "scaffold": scaffold,
@@ -1565,6 +2270,7 @@ def score_record(
         "stp_score": _round_or_none(components["stp"]),
         "tvr_score": _round_or_none(components["tvr"]),
         "composite_score": round(composite, 4),
+        "reproduce_first": reproduce_first,
     }
 
 
@@ -1621,6 +2327,7 @@ def _print_group_stats(group_name: str, records: list[dict[str, Any]]) -> None:
         "ped_score", "psn_score", "tte_score", "scp_score",
         "sub_score", "fec_score", "stp_score", "tvr_score",
         "composite_score",
+        "reproduce_first",  # 诊断: mean = 改源码轨迹中的先复现率 (None=没改源码, 已排除)
     ]
 
     print(f"\n  [{group_name}] ({len(records)} 条)")

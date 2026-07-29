@@ -182,6 +182,7 @@ class TestScoreRecord:
             "stp_score",
             "tvr_score",
             "composite_score",
+            "reproduce_first",  # 纯诊断字段，不计入 composite
         }
         assert set(result.keys()) == expected_keys
 

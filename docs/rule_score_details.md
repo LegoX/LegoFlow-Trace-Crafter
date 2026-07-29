@@ -59,13 +59,13 @@ composite_score = Σ(weight_i × transformed(component_i)) / Σ(weight_i)
 衡量 assistant turn 数是否处在合理范围。
 
 ```text
-5 <= assistant_turns <= 30: 1.0
+5 <= assistant_turns <= 80: 1.0
 assistant_turns < 5: assistant_turns / 5
-assistant_turns >= 90: 0.0
-30 < assistant_turns < 90: quadratic decay
+assistant_turns >= 200: 0.0
+80 < assistant_turns < 200: quadratic decay
 ```
 
-TQS V2 不再依赖数据集内同脚手架的中位步数，因此 `score_dataset()` 是单遍扫描，`score_record()` 不需要 `median_steps`。
+区间与当前常见 agent `max_turn=200` 对齐：满分覆盖中短轨迹，打满 turn cap 视为步数效率为 0。TQS V2 不再依赖数据集内同脚手架的中位步数，因此 `score_dataset()` 是单遍扫描，`score_record()` 不需要 `median_steps`。
 
 ### TVR: Test Verification
 
@@ -77,13 +77,33 @@ TVR = 0.3 × has_test_write + 0.3 × has_test_run + 0.4 × late_test_success
 
 - `has_test_write`：是否通过 edit/write 工具或 bash 写入测试文件
 - `has_test_run`：是否运行测试命令
-- `late_test_success`：最后一次测试运行的 observation 没有错误为 1.0；测试失败但确实运行了测试为 0.3
+- `late_test_success`：最后一次测试运行的结论，三档取值
 
-测试命令识别包括 `pytest`、`python -m unittest`、`go test`、`cargo test`、`mvn test`、`gradle test`、`jest`、`vitest`、`npm test`、`make test` 等（`python` / `python3` 两种写法均可）。
+| 结论 | 取值 | 含义 |
+|------|------|------|
+| `pass` | 1.0 | 输出里有明确的通过摘要 |
+| `unknown` | 0.6 | 跑了测试，但输出看不出结论（常见于 `\| tail -5` 只截了几行日志） |
+| `fail` | 0.3 | 有明确失败信号 |
 
-测试文件识别包括 Python、Go、Rust、Java、JS/TS 常见测试命名模式，例如 `test_*.py`、`*_test.py`、`*_test.go`、`tests/*.rs`、`*Test.java`、`*.test.ts`、`*.spec.tsx`。
+`unknown` 档是必要的：早期实现把「看不出结论」等同于「通过」，而失败识别又只覆盖 Python，导致非 Python 语言的失败被系统性判成通过。单列一档后，「检测不到」不再等价于满分。
 
-此外 TVR **额外**识别 SWE-agent 常用的非正式验证习语：`python -c` 内联自测、以及 `reproduce`/`repro`/`verify`/`smoke`/`check` 命名的脚本（如 `python reproduce_bug.py`）。这些信号**仅用于 TVR**，不进入错误抑制路径——因此一个真正报错的 `python -c` traceback 不会被当成“测试输出”而在 DPI / 错误率中被吞掉。
+判定由 `_test_run_outcome()` 完成，与 `_is_error_result()`（工具调用错误率口径）**分离** —— 测试断言失败是有效的验证行为，不应计入工具调用失败。判定顺序：工具层硬失败 → 显式失败摘要 → **零测试跑成** → 显式通过摘要 → agent 回显的零退出码 → soft error 兜底 → unknown。
+
+把「显式通过」排在 soft error 之前，是因为一个通过的测试完全可能在输出里合法地打印 `TypeError` / `No such file or directory`（正是它在测的错误路径）。
+
+「零测试跑成」（`Ran 0 tests` / `no tests ran|were found` / `collected 0 items`）必须排在通过摘要**之前**并判为 `unknown`：一个测试都没跑起来时 runner 仍会打印裸 `OK`、`BUILD SUCCESS`、退出码 0。同理，所有通过模式里的计数都要求**非零** —— `0 passing`、`OK (0 tests)`、`Tests run: 0, Failures: 0, Errors: 0`（Maven 多模块里没有测试的模块）都不是「通过」。刻意不把 Go 的 `[no test files]` 计入：那是多包运行里没有测试的单个包，同一次运行的其它包仍在正常跑。
+
+覆盖的摘要形态取自真实轨迹，含 Go（`FAIL`，注意**不是** `FAILED`）、Rust（`test result: FAILED`、`error[E….]`）、Maven（`Tests run: N, Failures: M`、`BUILD FAILURE`）、Gradle、CTest（`The following tests FAILED`）、GoogleTest（`[  FAILED  ]`）、Jest/Vitest（`Tests: N failed`）、Mocha（`N failing`）、PHPUnit（`FAILURES!`）、RSpec、pytest、unittest（`Ran N tests` + `OK`）等。计数类模式一律排除 0（`0 failed` / `0 failures` 是**通过**时的正常输出）。
+
+测试命令识别包括 `pytest`、`python -m unittest`、`go test`、`cargo test`、`ctest`、`jest`、`vitest`、`npm test`、`make test`、Django 的 `runtests.py` / `manage.py test` 等。Maven/Gradle 允许 goal 与命令之间隔着 flag 与模块选择器（`mvn -o -q test`、`./mvnw -q -pl mod -am test`、`./gradlew -q :core:test`），并排除 Gradle 的 `-x test`（排除测试）。
+
+测试文件识别覆盖 Python、Go、Rust、Java/Kotlin/Scala、JS/TS、PHP、C#、C/C++、Perl 的常见命名与目录约定，例如 `test_*.py`、`*_test.go`、`tests/*.rs`、`src/test/java/**`、`*.test.ts`、`*Test.php`、`*Tests.cs`、`t/*.t`。
+
+此外 TVR **额外**识别 SWE-agent 常用的非正式验证习语：`python -c` 内联自测、`reproduce`/`repro`/`verify`/`smoke` 命名的脚本，以及「跑一遍程序」（`go run`、`cargo run`、`java Foo`、`ruby app.rb`、`python app.py`、`node server.js`、`./x.sh`）。这是有意的设计口径——编译/解释型语言下「跑一遍看会不会崩」就是其复现验证方式——现已对所有语言一致适用（早期实现把 Python 与 Node 排除在外）。安装/打包/起开发服务器（`pip install`、`python setup.py build`、`npm run dev`、`cargo build`、`manage.py runserver`）不计入。
+
+这些宽口径信号**仅用于 TVR**，不进入错误抑制路径——因此一个真正报错的 `python -c` traceback 不会被当成“测试输出”而在 DPI / 错误率中被吞掉。
+
+**命令判定按 shell 段进行**：段首是 `grep`/`rm`/`git`/`cat`/`find`/`ls` 等只读命令时整段跳过。否则 `git diff .../src/main/java/Foo.java` 会因路径里的 `java`、`rm -f vitest-tmp.config.ts` 会因文件名里的 `vitest` 被误判成跑测试。段拆分是引号感知的，避免把 `python3 -c "a='x'; b=1"` 的脚本正文切碎；被用来改文件的 `python -c`（正文含 `open(...,'w')` / `.write(`）判为编辑而非自测。
 
 ### FEC: File Edit Concentration
 
@@ -95,7 +115,9 @@ FEC = 1 - clip((mean_edits_per_file - 1) / 4, 0, 1)
 
 - 平均每个文件编辑 1 次得满分
 - 平均每个文件编辑 5 次及以上得 0 分
-- 编辑来源包括 edit/write 工具、OpenHands editor 工具，以及 bash 中的 `sed -i`、重定向、`tee`、`patch` 等写入操作
+- 编辑来源包括 edit/write 工具（含 Claude Code 的 `MultiEdit` / `NotebookEdit`、OpenCode 的 `patch`）、OpenHands editor 工具，以及 bash 中的 `sed -i` / `gsed -i` / `perl -pi`、重定向、`tee`、`patch` 等写入操作
+- 执行类工具的判别以**调用参数**为准（`_tool_call_is_execution` / `_exec_cmd_text`），与 TVR、错误检测同一套逻辑。早期实现在此处用的是工具名单 + `args["command"]`，导致改名 shell 工具、`execute_ipython_cell`（参数是 `code`）、用 `cmd`/`keystrokes` 键的工具，其 bash 编辑被整体漏掉
+- **没有检测到任何编辑时返回 `null`**（fail-soft，聚合时跳过），而不是 1.0。返回 1.0 等于把「检测盲区」和「完美的编辑集中度」判成同一件事，而聚合层还要取 `FEC^5`，于是「一次编辑都没抓到」拿满分、「抓到 3 次同文件编辑」只剩 0.031，漏抓反而成了加分项
 - 路径会去除 `/workspace/`、`/testbed/`、`/repo/`、`/home/swe-bench/` 等前缀后归一化
 
 ### DPI: Dirty Pattern Index
@@ -106,7 +128,7 @@ FEC = 1 - clip((mean_edits_per_file - 1) / 4, 0, 1)
 
 - 轨迹截断或非正常结束
 - 从未出现成功写操作
-- 工具/动作序列出现长循环
+- 工具/动作序列出现长循环（签名为 `tool + editor子命令 + target`；`file_editor view` 与 `str_replace` 视为不同动作，避免把同文件上的正常查看→编辑迭代误判为循环）
 - observation 中重复出现相同错误
 
 聚合时使用 `DPI^3`，用于放大低分轨迹和高分轨迹之间的差异。
@@ -161,6 +183,17 @@ FEC = 1 - clip((mean_edits_per_file - 1) / 4, 0, 1)
 
 ## 错误检测
 
+### 0. 文本归一（前置）
+
+所有基于 observation 内容的匹配都先经 `_scan_window()`：
+
+- **剥离 ANSI 转义**。命令 observation 普遍含 ANSI（`grep --color` 与彩色 runner 的输出）。转义序列会插进**词内部**，例如 Maven 的 `Tests run\x1b[m\x1b[K: 6, \x1b[01;31m\x1b[KFailures\x1b[m\x1b[K: 2`，其中 `\x1b[K` 的 `K` 是 word 字符，会让 `\bFAILED\b` 这类边界锚定完全失效。
+- **同时取输出的开头与结尾**（各 3000 字符）。命令输出的结论（测试摘要、`BUILD FAILURE`、退出码回显）通常在末尾，中间是大段正常日志；只扫开头会让超长输出的失败摘要落在窗口之外。
+- **尾窗对齐到行首**。`text[-3000:]` 会从任意字符位置切开，与开头窗口拼接后，被截断的**行中间**片段就成了一个伪造的行首，使 `^FAIL`、`^(?:FAILED|ERROR)\s`、`^\s*\[ERROR\]` 这些刻意行首锚定的模式命中根本不在行首的文本（例如正常日志里的 `... state was FAILED: cleanup done`）。因此尾窗先向前找到第一个换行再拼接（只在开头 300 字符内找，超过则视为超长单行不丢）。
+- 兼容 list 型 content（content-block 列表），避免正则抛 `TypeError`。
+
+> **注意**：OpenHands SDK 回填的 `[The command completed with exit code N.]` **不可用作失败信号**。命令通常写成 `<runner> ... 2>&1 | tail -40`，管道使 shell 退出码恒为 `tail` 的 0，该标记因而与测试是否通过无关。真正可用的是 agent 自己回显的 `${PIPESTATUS[0]}` 与输出内容本身。
+
 错误检测分为两个层次：**显式工具失败标记**和**命令输出错误信号**。关键区别在于后者只对“执行类”工具的 observation 生效，避免把文件查看/编辑工具返回的源码内容误判为工具调用错误（历史上工具调用错误率假阳性的主因）。
 
 ### 1. 显式工具失败标记（对所有工具类型生效）
@@ -202,10 +235,15 @@ FEC = 1 - clip((mean_edits_per_file - 1) / 4, 0, 1)
 工具名常被各 SWE 数据源重命名（`shell_exec`/`run_command`/`code_editor`/...），因此判别**以工具调用参数为准**，工具名单仅作回退：
 
 - `command` 取编辑器子命令（`view`/`create`/`str_replace`/`insert`/`undo_edit`），或携带编辑器专属参数（`old_str`/`new_str`/`file_text`/`view_range`/`insert_line`）→ 文件查看/编辑工具，**非执行类**
+- 携带 `task_list`/`thought`/`task_completed` → `task_tracker`/`think`/`finish`，**非执行类**（`task_tracker` 也带 `command` 参数，但取值是 `plan`/`add` 而非 shell 命令；只看「command 非空」会把它判成执行类）
 - 否则若携带非空 shell 命令参数（`command`/`cmd`/`keystrokes`）→ **执行类**
 - 都不满足时回退到执行类工具名单（`bash`/`terminal`/`execute_bash`/`shell`/`ipython`/`python` 等）
 
 Terminus2 的 observation 全部是终端命令输出，按执行类处理。
+
+**这套判别必须在所有需要「该 tool_call 是否执行了命令 / 通过 shell 改了文件」的地方统一使用**，共 7 个调用点：`_extract_observations`、`_extract_edit_paths`（FEC）、`_compute_tvr`、`_has_successful_write`（DPI）、`_first_successful_write_turn`（SCP）、`_per_step_target_files`（PSN）、`_action_target_files` / `_loop_signature_for_action`（PED、DPI loop）、`_classify_action`（IAC、TTE）。shell 编辑路径统一走 `_exec_bash_edit_paths()`。
+
+只在部分调用点使用会造成**同一条轨迹仅因工具改名就换一个分数**：把 `execute_bash` 改名成只声明 `command` 参数的 `shell_exec`（`_infer_canonical_name` 无法据此归一）后，DPI 会因误判「从未成功写入」而扣 0.40、SCP 判 0，而参数完全一致。
 
 ## 工具名归一化（预处理）
 
@@ -316,4 +354,5 @@ Terminus2 的一个 observation 可能对应前一个 assistant turn 的多个 c
 - v3：早期 2 组 4 指标框架，主要包含 Efficiency 和 Style
 - v4：扩展为 5 组 10 指标，加入 Tool Mastery、Completion、Precision
 - v5：调整组权重和子指标权重，降低步数、并行度等饱和指标的影响
-- TQS V2（当前）：改为 fail-soft 组件聚合，保留诊断指标输出，综合分主要由提交完整性、步数效率、测试验证、文件编辑集中度和脏模式惩罚决定
+- TQS V2：改为 fail-soft 组件聚合，保留诊断指标输出，综合分主要由提交完整性、步数效率、测试验证、文件编辑集中度和脏模式惩罚决定
+- TQS V2 多语言校准（当前）：修正跨语言口径偏差。原失败识别只覆盖 Python 的签名，导致 Go/Java/Rust/JS 的测试失败被系统性判成通过。要点：ANSI 剥离与头尾双扫描窗口（尾部对齐行首）；`_test_run_outcome()` 三档多语言测试结果判定，通过信号要求非零计数并单列「零测试跑成」；测试命令逐 shell 段判定；「以调用参数判别执行类工具」贯彻到全部 7 个调用点，使打分对工具改名鲁棒；FEC 零编辑返回 `null` 而非满分。回归覆盖见 `tests/test_rule_score_multilang.py`。

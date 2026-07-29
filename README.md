@@ -61,7 +61,9 @@ swe_data_process/
 │   ├── cc_im_llm_scored.jsonl            # Scoring example: after llm_score.py
 │   └── cc_im_llm_checklist_scored.jsonl  # Scoring example: after llm_checklist_score.py
 ├── docs/
+│   ├── assets/                           # Diagrams referenced by the docs
 │   ├── data_format_requirement_panguml_v2.md  # Data format specification
+│   ├── data_filtering_strategy.md        # End-to-end filtering / scoring / sampling funnel
 │   ├── rule_score_details.md             # Rule-based scoring framework (TQS V2) reference
 │   ├── llm_score_details.md              # LLM-as-judge scoring framework reference
 │   └── llm_checklist_score_details.md    # Checklist-based LLM scoring reference
@@ -75,7 +77,8 @@ swe_data_process/
 │   ├── test_convert_jsonl_to_openai.py  # Claude Code/OpenCode converter
 │   ├── test_openhands_common.py      # OpenHands helpers
 │   ├── test_terminus2_common.py      # Terminus2 helpers
-│   └── test_rule_score.py           # Scoring functions, scaffold detection
+│   ├── test_rule_score.py           # Scoring functions, scaffold detection
+│   └── test_rule_score_multilang.py # Multi-language TVR/FEC regression suite
 ├── pyproject.toml                        # Package metadata (pip install -e .)
 ```
 
