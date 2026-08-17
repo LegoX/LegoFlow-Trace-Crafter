@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
-"""OctoBench 对齐的动态 checklist LLM 打分模块。
+"""OctoBench-aligned dynamic checklist LLM scoring.
 
-核心流程：
-1. 从记录中提取用户问题、系统提示词、工具定义（多指令来源）
-2. 让 LLM 基于所有指令来源生成原子化、二值可判定的 checklist（15-35 项）
-3. 再结合完整轨迹，让 LLM 按 checklist 逐项做二值判分（0/1）
-4. 计算 ISR（全通过=1）和 CSR（逐项通过率），写入 ``_score`` 字段
+Workflow:
+1. Extract the user question, system prompt, and tool definitions from a record.
+2. Generate an atomic, binary checklist from all instruction sources (15-35 items).
+3. Judge the complete trajectory against each checklist item with a binary score (0/1).
+4. Compute ISR (all items pass) and CSR (item pass rate), then write them to ``_score``.
 
-与 OctoBench 对齐的维度：
-- checklist 来源：用户问题 + 系统提示词 + 工具定义（多指令来源）
-- check 数量：15-35 项（上限 40），对标 OctoBench 平均 ~33 项
-- 单项评分：严格二值 0/1（passed/failed），无 partial
-- 权重：所有 check 等权，无显式权重
-- 聚合指标：ISR（Instance Success Rate）+ CSR（Check item Success Rate）
+OctoBench alignment:
+- Sources: user question, system prompt, and tool definitions.
+- Checklist size: 15-35 items, up to 40, compared with an OctoBench average of ~33.
+- Item scoring: strict binary 0/1 (passed/failed), with no partial credit.
+- Weighting: all items have equal weight.
+- Aggregate metrics: ISR (Instance Success Rate) and CSR (Check Item Success Rate).
 
-参考:
-- OctoBench (arXiv:2601.10343) 的指令来源分类与 ISR/CSR 评估框架
-- 项目现有 ``llm_score.py`` 的异步并发、断点续评与 JSONL I/O 设计
+References:
+- OctoBench (arXiv:2601.10343) instruction-source taxonomy and ISR/CSR framework.
+- Asynchronous scoring, resume support, and JSONL I/O from ``llm_score.py``.
 
-用法:
-  conda activate swelf
-  export OPENAI_BASE_URL="..."
-  export OPENAI_API_KEY="sk-..."
+Usage:
+  Set OPENAI_API_KEY and, if needed, OPENAI_BASE_URL in the environment.
   python -m swe_data_process.llm_checklist_score \
-      --input artifacts/cc_im.jsonl \
-      --output artifacts/cc_im_llm_checklist_scored.jsonl \
+      --input outputs/trajectories.im.jsonl \
+      --output outputs/trajectories.checklist-scored.jsonl \
       --model gpt-4o-mini --concurrency 8
 """
 
@@ -78,65 +76,65 @@ _ID_SAFE_RE = re.compile(r"[^a-zA-Z0-9_]+")
 # ═══════════════════════════════════════════════════════════════════════════
 
 _CHECKLIST_SCHEMA_EXAMPLE = """{
-  "question_summary": "用户希望增加一项命令校验模块，并补充失败日志与测试。",
+  "question_summary": "The user wants a command validation module, failure logging, and tests.",
   "categories": [
     {
       "category_id": "user_query",
-      "description": "用户消息中明确提出的要求",
+      "description": "Explicit requirements from the user message",
       "checks": [
         {
           "check_id": "user_query_1",
-          "description": "实现命令校验模块的核心逻辑",
+          "description": "Implement the core command validation logic",
           "check_type": "implementation",
-          "required_evidence": "代码修改或工具输出应体现功能已真正接入"
+          "required_evidence": "Code changes or tool output show that the feature is integrated"
         },
         {
           "check_id": "user_query_2",
-          "description": "补充失败日志记录功能",
+          "description": "Add failure logging",
           "check_type": "implementation",
-          "required_evidence": "轨迹中出现日志相关代码修改"
+          "required_evidence": "The trajectory contains logging-related code changes"
         },
         {
           "check_id": "user_query_3",
-          "description": "补充与改动直接相关的测试",
+          "description": "Add tests directly related to the change",
           "check_type": "testing",
-          "required_evidence": "轨迹中出现新增测试文件或测试用例"
+          "required_evidence": "The trajectory contains new test files or test cases"
         }
       ]
     },
     {
       "category_id": "system_prompt",
-      "description": "系统提示词中的指令与约束",
+      "description": "Instructions and constraints from the system prompt",
       "checks": [
         {
           "check_id": "system_prompt_1",
-          "description": "遵循系统提示词中关于代码风格的要求",
+          "description": "Follow the code style requirements in the system prompt",
           "check_type": "compliance",
-          "required_evidence": "代码修改符合系统提示词中声明的风格规范"
+          "required_evidence": "Code changes follow the style rules stated in the system prompt"
         }
       ]
     },
     {
       "category_id": "tool_schema",
-      "description": "工具定义所隐含的正确使用方式",
+      "description": "Correct usage implied by tool definitions",
       "checks": [
         {
           "check_id": "tool_schema_1",
-          "description": "使用正确的工具完成文件编辑操作",
+          "description": "Use the correct tool for file edits",
           "check_type": "compliance",
-          "required_evidence": "轨迹中使用了合适的编辑工具而非低效替代"
+          "required_evidence": "The trajectory uses an appropriate editing tool instead of an inefficient substitute"
         }
       ]
     },
     {
       "category_id": "verification",
-      "description": "验证与回归",
+      "description": "Verification and regression coverage",
       "checks": [
         {
           "check_id": "verification_1",
-          "description": "运行测试并确认通过",
+          "description": "Run tests and confirm they pass",
           "check_type": "testing",
-          "required_evidence": "轨迹中出现测试执行命令及通过结果"
+          "required_evidence": "The trajectory contains a test command and passing output"
         }
       ]
     }
@@ -144,7 +142,7 @@ _CHECKLIST_SCHEMA_EXAMPLE = """{
 }"""
 
 _JUDGE_SCHEMA_EXAMPLE = """{
-  "summary": "轨迹完成了主要实现和测试，但未遵循系统提示词中的风格约束。",
+  "summary": "The trajectory completed the main implementation and tests but violated a system-prompt style constraint.",
   "categories": [
     {
       "category_id": "user_query",
@@ -153,10 +151,10 @@ _JUDGE_SCHEMA_EXAMPLE = """{
           "check_id": "user_query_1",
           "status": "passed",
           "score": 1,
-          "reasoning": "assistant_turn_index=6 中已修改核心实现，并在后续工具输出中看到代码接入成功。",
+          "reasoning": "assistant_turn_index=6 changed the core implementation, and later tool output confirms successful integration.",
           "evidence": [
-            "assistant_turn_index=6 修改了目标文件",
-            "assistant_turn_index=8 的工具输出显示逻辑已生效"
+            "assistant_turn_index=6 changed the target file",
+            "Tool output at assistant_turn_index=8 shows the logic working"
           ]
         }
       ]
@@ -168,7 +166,7 @@ _JUDGE_SCHEMA_EXAMPLE = """{
           "check_id": "verification_1",
           "status": "failed",
           "score": 0,
-          "reasoning": "轨迹中没有运行任何测试命令。",
+          "reasoning": "The trajectory contains no test command.",
           "evidence": []
         }
       ]
@@ -176,9 +174,11 @@ _JUDGE_SCHEMA_EXAMPLE = """{
   ]
 }"""
 
-_CHECKLIST_GENERATION_PROMPT = """你是一个软件工程任务 checklist 设计器。
+_CHECKLIST_GENERATION_PROMPT = """You design checklists for software engineering tasks.
 
-你的任务是：根据用户问题、系统提示词和可用工具定义，为后续的轨迹评审生成一个”原子化、可判定、覆盖充分”的 checklist。
+Generate an atomic, binary-decidable, and sufficiently comprehensive checklist
+for later trajectory evaluation from the user question, system prompt, and
+available tool definitions.
 
 ================ USER QUESTION ================
 {question}
@@ -192,30 +192,39 @@ _CHECKLIST_GENERATION_PROMPT = """你是一个软件工程任务 checklist 设�
 {tools}
 ================ AVAILABLE TOOLS ================
 
-请严格遵守以下规则：
-1. checklist 必须基于上述所有指令来源（用户问题、系统提示词、工具定义）提取可验证的要求
-2. 每个 check 必须是原子化、二值可判定的（完成/未完成），不允许模糊或主观的描述
-3. 如果某个来源包含多个独立要求，必须拆成多个 check
-4. 将 checks 按指令来源放入以下类别，空类别可以省略：
-   - user_query: 用户消息中明确提出的功能、修改、输出要求
-   - system_prompt: 系统提示词中的行为约束、风格规范、安全规则
-   - tool_schema: 工具定义所隐含的正确使用方式（如应使用 Edit 而非 sed）
-   - repo_policy: 仓库规范文件（CLAUDE.md、AGENTS.md 等）中的约束（若在系统提示词中可见）
-   - implementation: 代码实现的正确性、完整性要求
-   - verification: 测试、验证、回归检查要求
-   - communication: 用户要求的解释、总结、输出格式
-5. 总 check 数控制在 15-35 个；只在任务确实简单时可少于 15 个，复杂任务可达 40 个
-6. check_type 取值：compliance / implementation / modification / understanding / testing / configuration
-7. required_evidence 说明后续轨迹里应观察到什么证据才能判定为通过
-8. 输出必须是合法 JSON，JSON 外不要有任何文字
+Follow these rules strictly:
+1. Derive verifiable requirements from every instruction source above: the
+   user question, system prompt, and tool definitions.
+2. Make every check atomic and objectively decidable as complete or incomplete.
+   Do not use vague or subjective descriptions.
+3. Split a source containing multiple independent requirements into separate checks.
+4. Group checks by instruction source using these categories; omit empty categories:
+   - user_query: Explicit feature, modification, and output requirements from the user.
+   - system_prompt: Behavioral constraints, style rules, and safety requirements.
+   - tool_schema: Correct usage implied by tool definitions, such as using an
+     editing tool instead of sed.
+   - repo_policy: Constraints from repository policy files when visible in the
+     system prompt.
+   - implementation: Correctness and completeness requirements for the implementation.
+   - verification: Testing, verification, and regression requirements.
+   - communication: User-requested explanations, summaries, and output formats.
+5. Generate 15-35 checks. Use fewer than 15 only for a genuinely simple task;
+   a complex task may use up to 40.
+6. `check_type` must be one of: compliance / implementation / modification /
+   understanding / testing / configuration.
+7. `required_evidence` must describe the evidence needed in the later trajectory
+   to mark the check as passed.
+8. Return valid JSON with no text outside the JSON object. Write all summaries,
+   descriptions, and evidence requirements in English.
 
-输出格式：
+OUTPUT FORMAT:
 {schema}
 """
 
-_JUDGE_PROMPT_TEMPLATE = """你是一个严格的软件工程轨迹评审模型。
+_JUDGE_PROMPT_TEMPLATE = """You are a strict judge of software engineering trajectories.
 
-你的任务是：根据给定的 checklist，判断 agent 的轨迹是否完成了用户问题中的各项要求。
+Use the provided checklist to determine whether the agent's trajectory
+completed every requirement in the user question.
 
 ================ USER QUESTION ================
 {question}
@@ -234,20 +243,24 @@ _JUDGE_PROMPT_TEMPLATE = """你是一个严格的软件工程轨迹评审模型�
 ==== MESSAGES ====
 ================ INPUT CONVERSATION ================
 
-评分规则：
-1. 必须对 checklist 中每个 check_id 逐项打分，不可遗漏
-2. score 只能取 0 或 1（严格二值）：
-   - 0 = 未完成，或轨迹中没有充分证据证明已完成
-   - 1 = 明确完成，且轨迹中有直接证据
-3. status 必须与 score 对应：
+SCORING RULES:
+1. Score every check_id in the checklist without omissions.
+2. `score` must be strictly binary:
+   - 0 = Incomplete, or the trajectory lacks sufficient evidence of completion.
+   - 1 = Clearly complete, with direct evidence in the trajectory.
+3. `status` must match `score`:
    - 0 -> failed
    - 1 -> passed
-4. reasoning 用中文简洁说明判定依据，尽量引用 assistant_turn_index 或具体工具行为
-5. evidence 是 1-3 条简短证据片段；若确实没有证据，给空数组
-6. 严格评分：不要因为”尝试过”或”部分完成”就给 1 分；只有清楚、完整地完成才给 1 分
-7. 输出必须是合法 JSON，JSON 外不要有任何文字
+4. Explain each decision concisely in English in `reasoning`, citing
+   assistant_turn_index or specific tool behavior when possible.
+5. Provide 1-3 short English evidence snippets in `evidence`; use an empty
+   array when no evidence exists.
+6. Score strictly. Do not assign 1 for an attempt or partial completion; assign
+   1 only when the requirement is clearly and fully complete.
+7. Return valid JSON with no text outside the JSON object. Write the summary,
+   reasoning, and evidence in English.
 
-输出格式：
+OUTPUT FORMAT:
 {schema}
 """
 
@@ -1058,82 +1071,70 @@ def print_llm_checklist_score_summary(records: list[dict[str, Any]]) -> None:
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
-        description="基于用户问题动态生成 checklist，再对 IM 轨迹进行 LLM 判分",
+        description="Generate a checklist from the user question and score an IM trajectory",
     )
     parser.add_argument(
         "--input",
         type=Path,
         required=True,
-        help="输入 IM JSONL 文件路径",
+        help="Path to the input IM JSONL file",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=None,
-        help="输出 JSONL 文件路径（默认: <input>_llm_checklist_scored.jsonl）",
+        help="Output JSONL path (default: <input>_llm_checklist_scored.jsonl)",
     )
     parser.add_argument(
         "--model",
         type=str,
         default="gpt-4o-mini",
-        help="默认模型名称（若未显式提供 checklist/judge model，则两者都用它）",
+        help="Default model for checklist generation and judging",
     )
     parser.add_argument(
         "--checklist-model",
         type=str,
         default=None,
-        help="生成 checklist 的模型名称（默认继承 --model）",
+        help="Checklist generation model (default: --model)",
     )
     parser.add_argument(
         "--judge-model",
         type=str,
         default=None,
-        help="按轨迹判分的模型名称（默认继承 --model）",
-    )
-    parser.add_argument(
-        "--api-key",
-        type=str,
-        default=None,
-        help="OpenAI API key（默认从 OPENAI_API_KEY 环境变量读取）",
-    )
-    parser.add_argument(
-        "--base-url",
-        type=str,
-        default=None,
-        help="OpenAI-compatible API base URL（默认从 OPENAI_BASE_URL 环境变量读取）",
+        help="Trajectory judge model (default: --model)",
     )
     parser.add_argument(
         "--concurrency",
         type=int,
         default=8,
-        help="并发请求数（默认: 8）",
+        help="Number of concurrent requests (default: 8)",
     )
     parser.add_argument(
         "--max-instances",
         type=int,
         default=None,
-        help="最多处理的记录数",
+        help="Maximum number of records to process",
     )
     parser.add_argument(
         "--question-field",
         type=str,
         default=None,
-        help="显式指定用户问题字段名（如 user_query）",
+        help="Field containing the user question, such as user_query",
     )
     parser.add_argument(
         "--no-system-prompt",
         action="store_true",
-        help="生成 checklist 时不包含系统提示词（默认包含，与 OctoBench 对齐）",
+        help="Exclude the system prompt from checklist generation",
     )
     parser.add_argument(
         "--no-json-mode",
         action="store_true",
-        help="禁用 response_format=json_object（用于不支持该参数的 API）",
+        help="Disable response_format=json_object for APIs that do not support it",
     )
     parser.add_argument(
         "--quiet",
         action="store_true",
-        help="减少日志输出",
+        help="Reduce log output",
     )
     return parser.parse_args()
 
@@ -1142,7 +1143,7 @@ async def _async_main(args: argparse.Namespace) -> None:
     """Async entry point."""
     input_path = args.input
     if not input_path.exists():
-        print(f"错误: 输入文件不存在: {input_path}")
+        print(f"Error: input file does not exist: {input_path}")
         sys.exit(1)
 
     output_path = args.output
@@ -1151,17 +1152,17 @@ async def _async_main(args: argparse.Namespace) -> None:
             f"{input_path.stem}_llm_checklist_scored.jsonl",
         )
 
-    print(f"读取: {input_path}")
+    print(f"Reading: {input_path}")
     records = load_jsonl(input_path)
-    print(f"加载了 {len(records)} 条记录")
+    print(f"Loaded {len(records)} records")
 
     if not records:
-        print("没有记录，退出。")
+        print("No records found; exiting.")
         sys.exit(0)
 
     if args.max_instances is not None and args.max_instances < len(records):
         records = records[:args.max_instances]
-        print(f"截断到 {len(records)} 条记录")
+        print(f"Limited input to {len(records)} records")
 
     if output_path.exists() and output_path != input_path:
         prev = load_jsonl(output_path)
@@ -1182,7 +1183,7 @@ async def _async_main(args: argparse.Namespace) -> None:
                     if key.startswith("llm_checklist_"):
                         records[index]["_score"][key] = value
                 merged += 1
-            print(f"从已有输出恢复了 {merged} 条 dynamic checklist 评分（断点续评）")
+            print(f"Restored {merged} dynamic checklist scores from the existing output")
 
     checklist_model = args.checklist_model or args.model
     judge_model = args.judge_model or args.model
@@ -1190,8 +1191,6 @@ async def _async_main(args: argparse.Namespace) -> None:
     if checklist_model == judge_model:
         shared_client = LLMClient(
             model=judge_model,
-            api_key=args.api_key,
-            base_url=args.base_url,
             concurrency=args.concurrency,
             json_mode=not args.no_json_mode,
         )
@@ -1200,15 +1199,11 @@ async def _async_main(args: argparse.Namespace) -> None:
     else:
         checklist_client = LLMClient(
             model=checklist_model,
-            api_key=args.api_key,
-            base_url=args.base_url,
             concurrency=args.concurrency,
             json_mode=not args.no_json_mode,
         )
         judge_client = LLMClient(
             model=judge_model,
-            api_key=args.api_key,
-            base_url=args.base_url,
             concurrency=args.concurrency,
             json_mode=not args.no_json_mode,
         )
@@ -1236,7 +1231,7 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     print_llm_checklist_score_summary(scored)
     save_jsonl(output_path, scored)
-    print(f"Dynamic checklist 打分结果已保存到: {output_path}")
+    print(f"Saved dynamic checklist scoring results to: {output_path}")
 
 
 def main() -> None:

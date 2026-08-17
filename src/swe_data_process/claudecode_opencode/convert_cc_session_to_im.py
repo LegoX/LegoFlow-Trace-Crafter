@@ -105,18 +105,18 @@ def parse_args() -> argparse.Namespace:
         "--im-output",
         type=Path,
         required=True,
-        help="输出 IM JSONL 文件",
+        help="Output IM JSONL file",
     )
     parser.add_argument(
         "--lf-output",
         type=Path,
         required=True,
-        help="输出 LF JSON 文件",
+        help="Output LF JSON file",
     )
     parser.add_argument(
         "--tokenizer-name",
         default=DEFAULT_TOKENIZER_NAME,
-        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
+        help="Tokenizer name for conversion to LLaMA-Factory ShareGPT JSON",
     )
     parser.add_argument(
         "--system-prompt",
@@ -146,19 +146,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
         default=EXCLUDED_REPOS_FILE,
-        help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
+        help="Path to the curated repository exclusion list bundled with the package",
     )
     parser.add_argument(
         "--reasoning-check-mode",
         choices=("strict", "adaptive"),
         default="adaptive",
-        help="slow 轨迹 reasoning_content 过滤模式",
+        help="reasoning_content validation mode for slow trajectories",
     )
     parser.add_argument(
         "--reasoning-content-ratio-threshold",
         type=float,
         default=0.2,
-        help="adaptive 模式下 assistant 轮次包含 reasoning_content 的最低比例",
+        help="Minimum fraction of assistant turns with reasoning_content in adaptive mode",
     )
     return parser.parse_args()
 

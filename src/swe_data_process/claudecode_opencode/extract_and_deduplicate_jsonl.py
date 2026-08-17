@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-对齐 mini-vela/convert/dedup.py 的去重语义，对单个 instance 的 JSONL 轨迹做子轨迹去重：
+Deduplicate subtrajectories in one instance's JSONL trajectory, matching the
+semantics of mini-vela/convert/dedup.py:
 
-0) 过滤 logger 标记 success=false 的失败调用（HTTP 超时/5xx/上游拒答等）
-1) 按 request_time 升序排序
-2) 规范化 input：深拷贝后剥除 cache_control / signature / generation 字段；
-   剔除 message.content 列表中 type=thinking 的 item；首条 user message 的
-   list-content 拍平为纯文本；用 sort_keys 序列化
-3) 两两比较：若 normalized[j].startswith(normalized[i]) 则 keep[i]=False
-   （保留更长的那条前缀扩展）
-4) 过滤 input 数 <= 2 的记录，并做一次整条记录级精确去重
+0) Drop failed calls marked success=false by the logger (HTTP timeouts, 5xx
+   responses, upstream rejections, and so on).
+1) Sort by request_time in ascending order.
+2) Normalize input: deep-copy it and remove cache_control, signature, and
+   generation fields; remove type=thinking items from message.content lists;
+   flatten the first user message's list content to plain text; serialize with
+   sort_keys.
+3) Compare every pair: if normalized[j].startswith(normalized[i]), set
+   keep[i]=False, retaining the longer prefix extension.
+4) Filter records whose input count is at most 2, then exactly deduplicate
+   complete records.
 """
 
 from __future__ import annotations
@@ -24,14 +28,14 @@ from swe_data_process.utils import save_jsonl
 
 
 def get_input_data(item: dict[str, Any]) -> Any:
-    """安全获取轨迹输入，兼容新旧 logger 字段及多种 CC 格式。"""
+    """Safely read trajectory input across logger versions and CC formats."""
     request_body = item.get("request_body", {})
     if "input" in request_body:
         return request_body.get("input")
     extra_input = request_body.get("extra_params", {}).get("input")
     if extra_input:
         return extra_input
-    # messages 直接在 request_body 下
+    # Some records store messages directly under request_body.
     if "messages" in request_body:
         return request_body.get("messages")
     return ""
@@ -41,10 +45,11 @@ _STRIP_KEYS = frozenset({"cache_control", "signature", "generation"})
 
 
 def _strip_for_compare(obj: Any) -> Any:
-    """深度拷贝并剥除比较无关字段，同时剔除 content 列表中的 thinking item。
+    """Deep-copy data while removing comparison-irrelevant fields.
 
-    与 mini-vela dedup.py 中 `remove_keys` + `remove_thinking_items` 等价，
-    但用纯函数式返回新对象，避免就地修改原记录。
+    This also removes thinking items from content lists. It is equivalent to
+    `remove_keys` plus `remove_thinking_items` in mini-vela dedup.py, but
+    returns new objects instead of mutating the original record.
     """
     if isinstance(obj, dict):
         result: dict[str, Any] = {}
@@ -65,9 +70,10 @@ def _strip_for_compare(obj: Any) -> Any:
 
 
 def _flatten_first_user_content(messages: list[Any]) -> None:
-    """把首条 user message 的 list-content 拍平为纯字符串，保证 prefix 可比。
+    """Flatten the first user's list content to text for prefix comparison.
 
-    对齐 mini-vela `get_messages_hash` 的首条 user 拍平步骤。
+    This matches the first-user flattening step in mini-vela
+    `get_messages_hash`.
     """
     for msg in messages:
         if not isinstance(msg, dict) or msg.get("role") != "user":
@@ -88,13 +94,14 @@ _CCH_PATTERN = re.compile(r"cch=[0-9a-f]+;")
 
 
 def normalize_input(input_value: Any) -> str:
-    """对 input 做 mini-vela 风格的规范化后序列化成可用于 prefix 比较的字符串。
+    """Normalize input in mini-vela style for serialized prefix comparison.
 
-    - list 输入：先剥字段再移 thinking item，再拍平首条 user content，
-      最后 sort_keys 序列化并去掉外层 `[`、`]` 以便前缀判断。
-    - 非 list 输入：兜底直接序列化或原样字符串。
+    - List input: remove fields and thinking items, flatten the first user's
+      content, serialize with sort_keys, and remove the outer `[` and `]`.
+    - Other input: serialize directly, or return strings unchanged.
 
-    动态字段（如 Claude Code 的 cch= 哈希）会被统一替换，避免破坏前缀关系。
+    Dynamic fields such as Claude Code's cch= hash are replaced consistently
+    so they do not break prefix relationships.
     """
     if isinstance(input_value, list):
         stripped = _strip_for_compare(input_value)
@@ -108,7 +115,7 @@ def normalize_input(input_value: Any) -> str:
 
 
 def _record_normalize_key(record: dict[str, Any]) -> str:
-    """整条记录的规范化 key（用于 exact dedup），剥 cache_control/signature/generation。"""
+    """Build a whole-record exact-dedup key with transient fields removed."""
     return json.dumps(_strip_for_compare(record), sort_keys=True, ensure_ascii=False)
 
 
@@ -124,20 +131,23 @@ def deduplicate_trajectories(input_jsonl: str | Path) -> list[dict[str, Any]]:
             try:
                 records.append(json.loads(line))
             except json.JSONDecodeError as e:
-                print(f"[WARN] line {line_no} 不是合法 JSON，已跳过: {e}")
+                print(f"[WARN] Line {line_no} is not valid JSON; skipping: {e}")
 
-    # 显式过滤 logger 标记为失败的调用 (HTTP 超时 / 5xx / 上游拒答等)。
-    # 这些行的 response_body 通常是错误结构，若让它们进入前缀去重，
-    # 偶尔会作为"最长扩展"被保留，污染下游 convert_record。
+    # Explicitly drop calls the logger marked as failed (HTTP timeout, 5xx,
+    # upstream rejection, and so on). Their response_body is usually an error
+    # structure that prefix deduplication can mistakenly retain as the longest
+    # extension, contaminating downstream convert_record output.
     records = filter_failed_records(records)
 
-    # 对齐 mini-vela：去重前按 request_time 升序（缺失视为 0，保持稳定序）
+    # Match mini-vela by sorting on request_time before deduplication. Treat a
+    # missing timestamp as 0 and preserve stable ordering.
     records.sort(key=lambda r: r.get("request_time", 0))
 
     normalized = [normalize_input(get_input_data(rec)) for rec in records]
     keep = [True] * len(records)
 
-    # 前缀去重：若 normalized[j] 以 normalized[i] 为前缀，则 i 被 j 覆盖，丢弃 i
+    # Prefix deduplication: if normalized[j] starts with normalized[i], j
+    # supersedes i, so discard i.
     for i in range(len(records)):
         if not keep[i]:
             continue
@@ -154,17 +164,18 @@ def deduplicate_trajectories(input_jsonl: str | Path) -> list[dict[str, Any]]:
 
 
 def filter_failed_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """过滤 logger 标记 success=false 的失败调用。
+    """Drop failed calls that the logger marked success=false.
 
-    LiteLLM logger 在 HTTP 失败 / 上游拒答 / 超时 / 5xx 时把整行的
-    ``success`` 字段写成 ``false``，对应的 ``response_body`` 通常是错误结构。
-    缺失 ``success`` 字段的记录默认视为成功（向后兼容旧 logger）。
+    The LiteLLM logger writes ``success: false`` for HTTP failures, upstream
+    rejections, timeouts, and 5xx responses. Their ``response_body`` is
+    typically an error structure. A missing ``success`` field defaults to
+    success for compatibility with older logger versions.
     """
     return [r for r in records if r.get("success", True) is not False]
 
 
 def filter_short_input_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """过滤 input 数目 <= 2 的记录。"""
+    """Drop records whose input contains at most two items."""
     filtered: list[dict[str, Any]] = []
     for rec in records:
         input_data = get_input_data(rec)
@@ -176,7 +187,7 @@ def filter_short_input_records(records: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def deduplicate_exact_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """对最终 records 做一次整条记录级别的去重（保持原顺序）。"""
+    """Deduplicate complete records while preserving their original order."""
     seen: set[str] = set()
     unique_records: list[dict[str, Any]] = []
     for rec in records:
@@ -189,15 +200,17 @@ def deduplicate_exact_records(records: list[dict[str, Any]]) -> list[dict[str, A
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="提取并去重 JSONL 轨迹（对齐 mini-vela 语义）")
+    parser = argparse.ArgumentParser(
+        description="Extract and deduplicate JSONL trajectories using mini-vela semantics"
+    )
     parser.add_argument(
         "-i", "--input",
-        help="输入 jsonl 文件路径",
+        help="Input JSONL file path",
         required=True,
     )
     parser.add_argument(
         "-o", "--output",
-        help="输出 jsonl 文件路径",
+        help="Output JSONL file path",
         required=True,
     )
     args = parser.parse_args()
@@ -206,12 +219,12 @@ def main() -> None:
     output_path = Path(args.output)
 
     if not input_path.exists():
-        raise FileNotFoundError(f"输入文件不存在: {input_path}")
+        raise FileNotFoundError(f"Input file does not exist: {input_path}")
 
     records = deduplicate_trajectories(input_path)
     save_jsonl(output_path, records)
 
-    print(f"完成：输入 {input_path}，输出 {output_path}，保留 {len(records)} 条轨迹")
+    print(f"Done: input {input_path}, output {output_path}, kept {len(records)} trajectories")
 
 
 if __name__ == "__main__":

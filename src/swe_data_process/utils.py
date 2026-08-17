@@ -17,16 +17,17 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-EXCLUDED_REPOS_FILE = REPO_ROOT / "artifacts" / "excluded_repos.txt"
+EXCLUDED_REPOS_FILE = (
+    Path(__file__).resolve().parents[2] / "artifacts" / "excluded_repos.txt"
+)
 
-PANGUML_VERSION = "2.0.0"
+IM_FORMAT_VERSION = "2.0.0"
 DEFAULT_TOKENIZER_NAME = "Qwen/Qwen3.5-35B-A3B"
 DEFAULT_SYSTEM_SOURCE_MODEL = "GLM-5.2-FP8"
 DEFAULT_SYSTEM_TARGET_MODEL = "Qwen3.5-35B-A3B"
 DEFAULT_TOKEN_BATCH_SIZE = 64
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
-_PANGUML_TOP_LEVEL_KEYS = frozenset({
+_IM_TOP_LEVEL_KEYS = frozenset({
     "version",
     "meta_info",
     "tools",
@@ -37,7 +38,7 @@ _PANGUML_TOP_LEVEL_KEYS = frozenset({
     "_agent_type",
     "_score",
 })
-_PANGUML_COMPAT_UNIQUE_INFO_KEYS = (
+_IM_COMPAT_UNIQUE_INFO_KEYS = (
     "_instance_id",
     "_agent_type",
     "_score",
@@ -302,7 +303,7 @@ def _align_tool_call_ids(messages: list[dict[str, Any]]) -> None:
                 assign_cursor += 1
 
 
-def _normalize_messages_for_panguml(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_messages_for_im(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized_messages: list[dict[str, Any]] = []
 
     for raw_message in messages:
@@ -359,7 +360,7 @@ def _normalize_messages_for_panguml(messages: list[dict[str, Any]]) -> list[dict
     return normalized_messages
 
 
-def _normalize_tools_for_panguml(tools: Any) -> list[dict[str, Any]]:
+def _normalize_tools_for_im(tools: Any) -> list[dict[str, Any]]:
     if not isinstance(tools, list):
         return []
 
@@ -391,12 +392,12 @@ def _build_meta_info(record: dict[str, Any], messages: list[dict[str, Any]]) -> 
     unique_info = meta_info.get("unique_info")
     normalized_unique_info = dict(unique_info) if isinstance(unique_info, dict) else {}
 
-    for key in _PANGUML_COMPAT_UNIQUE_INFO_KEYS:
+    for key in _IM_COMPAT_UNIQUE_INFO_KEYS:
         if key in record and key not in normalized_unique_info:
             normalized_unique_info[key] = record[key]
 
     for key, value in record.items():
-        if key in _PANGUML_TOP_LEVEL_KEYS:
+        if key in _IM_TOP_LEVEL_KEYS:
             continue
         normalized_unique_info.setdefault(key, value)
 
@@ -414,19 +415,19 @@ def _build_meta_info(record: dict[str, Any], messages: list[dict[str, Any]]) -> 
     }
 
 
-def to_panguml_v2_record(record: dict[str, Any]) -> dict[str, Any]:
-    messages = _normalize_messages_for_panguml(record.get("messages") or [])
-    tools = _normalize_tools_for_panguml(record.get("tools") or [])
+def to_im_v2_record(record: dict[str, Any]) -> dict[str, Any]:
+    messages = _normalize_messages_for_im(record.get("messages") or [])
+    tools = _normalize_tools_for_im(record.get("tools") or [])
 
     return {
-        "version": PANGUML_VERSION,
+        "version": IM_FORMAT_VERSION,
         "meta_info": _build_meta_info(record, messages),
         "tools": tools,
         "messages": messages,
     }
 
 
-def expand_panguml_compat_fields(record: dict[str, Any]) -> dict[str, Any]:
+def expand_im_compat_fields(record: dict[str, Any]) -> dict[str, Any]:
     if not is_im_record(record):
         return record
 
@@ -434,7 +435,7 @@ def expand_panguml_compat_fields(record: dict[str, Any]) -> dict[str, Any]:
     meta_info = expanded.get("meta_info")
     unique_info = meta_info.get("unique_info") if isinstance(meta_info, dict) else None
     if isinstance(unique_info, dict):
-        for key in _PANGUML_COMPAT_UNIQUE_INFO_KEYS:
+        for key in _IM_COMPAT_UNIQUE_INFO_KEYS:
             if key in unique_info and key not in expanded:
                 expanded[key] = unique_info[key]
     return expanded
@@ -446,7 +447,7 @@ def expand_panguml_compat_fields(record: dict[str, Any]) -> dict[str, Any]:
 
 @dataclass
 class ProcessSummary:
-    """汇总处理统计信息。"""
+    """Aggregate converter processing statistics."""
 
     role_filtered: int = 0
     reasoning_filtered: int = 0
@@ -567,29 +568,29 @@ def print_lf_token_stats(
 
 def check_roles(messages: list[dict[str, Any]]) -> bool:
     """
-    角色顺序：
-        1. 第一个角色一定是用户，最后一个角色一定是助手；
-        2. 助手之后只能是工具或用户；
-        3. 工具之后只能是工具或助手；
-        4. 用户之后只能是助手。
+    Validate message role ordering:
+        1. The first conversational role is user and the last is assistant.
+        2. An assistant message is followed only by a tool or user message.
+        3. A tool message is followed only by a tool or assistant message.
+        4. A user message is followed only by an assistant message.
     """
     if not messages:
-        print("  [check_roles] 异常数据，messages 为空")
+        print("  [check_roles] Invalid data: messages is empty")
         return False
 
     start_idx = 1 if messages[0]["role"] == "system" else 0
     if start_idx >= len(messages):
-        print("  [check_roles] 异常数据，system 之后没有有效对话")
+        print("  [check_roles] Invalid data: no conversation follows the system message")
         return False
 
     first_role = messages[start_idx]["role"]
     if first_role != "user":
-        print(f"  [check_roles] 异常数据，messages第一轮对话必须是用户，实际为: {first_role}")
+        print(f"  [check_roles] Invalid data: first conversation role must be user; got: {first_role}")
         return False
 
     last_role = messages[-1]["role"]
     if last_role != "assistant":
-        print(f"  [check_roles] 异常数据，messages最后一轮对话必须是助手，实际为: {last_role}")
+        print(f"  [check_roles] Invalid data: last conversation role must be assistant; got: {last_role}")
         return False
 
     for idx in range(start_idx + 1, len(messages)):
@@ -599,24 +600,24 @@ def check_roles(messages: list[dict[str, Any]]) -> bool:
 
         if pre_role == "assistant":
             if role != "tool" and role != "user":
-                print(f"  [check_roles] 异常数据，助手之后只能是工具或用户，实际为: {role} (idx={rel_idx})")
+                print(f"  [check_roles] Invalid data: only tool or user may follow assistant; got: {role} (idx={rel_idx})")
                 return False
         elif pre_role == "tool":
             if role != "tool" and role != "assistant":
-                print(f"  [check_roles] 异常数据，工具之后只能是工具或助手，实际为: {role} (idx={rel_idx})")
+                print(f"  [check_roles] Invalid data: only tool or assistant may follow tool; got: {role} (idx={rel_idx})")
                 return False
         elif pre_role == "user":
             if role != "assistant":
-                print(f"  [check_roles] 异常数据，用户之后只能是助手，实际为: {role} (idx={rel_idx})")
+                print(f"  [check_roles] Invalid data: only assistant may follow user; got: {role} (idx={rel_idx})")
                 return False
         else:
-            print(f"  [check_roles] 未知角色: role={role}, pre_role={pre_role} (idx={rel_idx})")
+            print(f"  [check_roles] Unknown role: role={role}, pre_role={pre_role} (idx={rel_idx})")
             return False
     return True
 
 
 def check_tool_calls(messages: list[dict[str, Any]]) -> bool:
-    """检查除最后一轮 assistant 外，其余 assistant 轮次是否都有 tool_calls。"""
+    """Check that every assistant turn except the last has tool_calls."""
     assistant_indices = [
         i for i, msg in enumerate(messages) if msg.get("role") == "assistant"
     ]
@@ -624,7 +625,7 @@ def check_tool_calls(messages: list[dict[str, Any]]) -> bool:
         return True
     for idx in assistant_indices[:-1]:
         if not messages[idx].get("tool_calls"):
-            print(f"  [check_tool_calls] 异常数据，assistant 轮次缺少 tool_calls (idx={idx})")
+            print(f"  [check_tool_calls] Invalid data: assistant turn lacks tool_calls (idx={idx})")
             return False
     return True
 
@@ -658,7 +659,7 @@ def check_reasoning_content(
     for idx in range(check_turns, len(messages)):
         msg = messages[idx]
         if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
-            print(f"  [check_reasoning_content] 异常数据，assistant 轮次缺少 reasoning_content (idx={idx})")
+            print(f"  [check_reasoning_content] Invalid data: assistant turn lacks reasoning_content (idx={idx})")
             return False
     return True
 
@@ -690,7 +691,7 @@ def convert_json_to_lf_format(
     scores_list: list[float] = []
 
     for i in tqdm(range(len(all_json_data))):
-        item = expand_panguml_compat_fields(all_json_data[i])
+        item = expand_im_compat_fields(all_json_data[i])
         text = tokenizer.apply_chat_template(
             _restore_tool_arguments_for_lf(item['messages']),
             tools=item.get('tools') or [],
@@ -782,12 +783,12 @@ def save_jsonl(output_path: Path, records: list[dict[str, Any]]) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
         for record in records:
-            output_record = to_panguml_v2_record(record) if is_im_record(record) else record
+            output_record = to_im_v2_record(record) if is_im_record(record) else record
             f.write(json.dumps(output_record, ensure_ascii=False) + "\n")
 
 
 def load_jsonl(file_path: Path) -> list[dict[str, Any]]:
-    """读取 JSONL 文件（每行一个 JSON 对象）。"""
+    """Read a JSONL file with one JSON object per line."""
     records: list[dict[str, Any]] = []
     with file_path.open("r", encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
@@ -796,9 +797,9 @@ def load_jsonl(file_path: Path) -> list[dict[str, Any]]:
                 continue
             try:
                 record = json.loads(line)
-                records.append(expand_panguml_compat_fields(record) if is_im_record(record) else record)
+                records.append(expand_im_compat_fields(record) if is_im_record(record) else record)
             except json.JSONDecodeError as e:
-                print(f"  [WARN] 跳过 {file_path.name} 第 {lineno} 行: {e}")
+                print(f"  [WARN] Skipping line {lineno} in {file_path.name}: {e}")
     return records
 
 
@@ -818,8 +819,8 @@ def save_lf_json(
         model_config=model_config,
     )
 
-    # 工具调用错误率基于 IM 记录计算（此时 role="tool" 结果尚未被 LF 合并），
-    # 局部导入避免 utils <-> rule_score 循环依赖。
+    # Compute the tool-call error rate from IM records before LF merges role="tool"
+    # results. Import locally to avoid a utils <-> rule_score dependency cycle.
     from swe_data_process.rule_score import (
         compute_tool_call_error_rate,
         print_tool_call_error_summary,
@@ -843,7 +844,7 @@ def save_lf_json(
 # ---------------------------------------------------------------------------
 
 def should_keep_instance(role_filtered: int, reasoning_filtered: int) -> bool:
-    """保持原始筛选逻辑：两个过滤计数都为 0 则保留该实例的记录。"""
+    """Preserve the original filter: keep an instance when both counts are zero."""
     return role_filtered == 0 and reasoning_filtered == 0
 
 
@@ -855,10 +856,11 @@ _MAIN_AGENT_TOOLS = frozenset({"edit", "write"})
 
 
 def detect_agent_type(record: dict[str, Any]) -> str:
-    """检测 IM 记录来自 main agent 还是 subagent。
+    """Detect whether an IM record came from the main agent or a subagent.
 
-    Main agent 拥有写操作工具 (Edit, Write)；subagent (context-gatherer) 只有只读工具。
-    无 tools 字段的记录（如 Terminus2）默认为 "main"。
+    The main agent has write tools (Edit, Write); a subagent (context-gatherer)
+    only has read-only tools. Records without tools (for example, Terminus2)
+    default to "main".
     """
     tools = record.get("tools")
     if not isinstance(tools, list) or not tools:
@@ -881,7 +883,7 @@ def tag_instance_records(
     instance_id: str,
     instance_metadata: dict[str, Any] | None = None,
 ) -> None:
-    """为同一 instance 的所有 converted records 添加实例信息和任务 metadata。"""
+    """Add instance and task metadata to all converted records for an instance."""
     for record in records:
         record["_instance_id"] = instance_id
         record["_agent_type"] = detect_agent_type(record)
@@ -894,10 +896,10 @@ def filter_by_score_bundled(
     min_score: float,
     score_key: str = "composite_score",
 ) -> list[dict[str, Any]]:
-    """按分数筛选记录，同 instance 的 main + subagent 捆绑保留/丢弃。
+    """Filter by score, retaining or dropping each instance as a bundle.
 
-    判定逻辑：instance 内 main agent 的最高分 >= min_score 则保留整个 instance。
-    无 _instance_id 的记录按自身分数独立判定。
+    Retain an instance when its highest main-agent score is at least min_score.
+    Evaluate records without _instance_id independently by their own score.
     """
     instance_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     ungrouped: list[dict[str, Any]] = []
@@ -1062,41 +1064,6 @@ def extract_instance_id_from_config(job_dir: Path, folder_name: str) -> str:
 # ---------------------------------------------------------------------------
 # Reference-repo filtering — exclude instances belonging to reference datasets
 # ---------------------------------------------------------------------------
-
-# Default reference datasets whose repos should be excluded from training data
-DEFAULT_REFERENCE_DATASETS: list[dict[str, str]] = [
-    {"name": "SWE-bench/SWE-bench_Verified", "split": "test"},
-    {"name": "ScaleAI/SWE-bench_Pro", "split": "test"},
-    {"name": "SWE-bench/SWE-bench_Multilingual", "split": "test"},
-]
-
-
-def load_reference_repos_from_hf(
-    reference_datasets: list[dict[str, str]] | None = None,
-) -> set[str]:
-    """Load unique repo names from HuggingFace reference datasets.
-
-    Returns a set of ``"owner/repo"`` strings (original casing preserved).
-    """
-    from datasets import load_dataset as _hf_load_dataset
-
-    if reference_datasets is None:
-        reference_datasets = DEFAULT_REFERENCE_DATASETS
-
-    all_repos: set[str] = set()
-    for spec in reference_datasets:
-        ds_name = spec["name"]
-        split = spec.get("split", "test")
-        try:
-            ds = _hf_load_dataset(ds_name, split=split)
-            repos = {str(row["repo"]).strip() for row in ds if row.get("repo")}
-            all_repos.update(repos)
-            print(f"  [ref] {ds_name}[{split}]: {len(repos)} unique repos")
-        except Exception as exc:
-            print(f"  [ref] WARNING: failed to load {ds_name}: {exc}")
-    print(f"  [ref] Total unique reference repos: {len(all_repos)}")
-    return all_repos
-
 
 def load_excluded_repos_from_file(exclude_repos_file: Path) -> set[str]:
     """Read excluded repos from a text file (one ``owner/repo`` per line).

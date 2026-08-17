@@ -65,8 +65,6 @@ class LLMClient:
     def __init__(
         self,
         model: str = "gpt-4o",
-        api_key: str | None = None,
-        base_url: str | None = None,
         concurrency: int = 10,
         timeout: float = 120.0,
         json_mode: bool = True,
@@ -77,8 +75,8 @@ class LLMClient:
         self.usage = TokenUsage()
         self._semaphore = asyncio.Semaphore(concurrency)
         self._client = AsyncOpenAI(
-            api_key=api_key or os.environ.get("OPENAI_API_KEY", ""),
-            base_url=base_url or os.environ.get("OPENAI_BASE_URL"),
+            api_key=os.environ.get("OPENAI_API_KEY"),
+            base_url=os.environ.get("OPENAI_BASE_URL"),
             timeout=timeout,
         )
 

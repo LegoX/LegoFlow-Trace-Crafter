@@ -25,59 +25,59 @@ from swe_data_process.utils import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="将 OpenHands SDK Harbor job 轨迹转为 IM（JSONL）与 LF JSON"
+        description="Convert OpenHands SDK Harbor job trajectories to IM (JSONL) and LF JSON"
     )
     parser.add_argument(
         "--job-dir",
         type=Path,
         required=True,
-        help="Harbor job 目录",
+        help="Harbor job directory",
     )
     parser.add_argument(
         "--im-output",
         type=Path,
         required=True,
-        help="输出 IM JSONL 文件",
+        help="Output IM JSONL file",
     )
     parser.add_argument(
         "--lf-output",
         type=Path,
         required=True,
-        help="输出 LF JSON 文件",
+        help="Output LF JSON file",
     )
     parser.add_argument(
         "--tokenizer-name",
         default=DEFAULT_TOKENIZER_NAME,
-        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
+        help="Tokenizer name for conversion to LLaMA-Factory ShareGPT JSON",
     )
     parser.add_argument(
         "--max-instances",
         type=int,
         default=None,
-        help="最多成功转换多少条，默认不限制",
+        help="Maximum number of successfully converted instances (default: unlimited)",
     )
     parser.add_argument(
         "--instance-status",
         choices=("resolved", "unresolved", "all"),
         default="resolved",
-        help="选择处理 resolved、unresolved 或全部实例，默认 resolved",
+        help="Select resolved, unresolved, or all instances (default: resolved)",
     )
     parser.add_argument(
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
         default=EXCLUDED_REPOS_FILE,
-        help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
+        help="Path to the curated repository exclusion list bundled with the package",
     )
     parser.add_argument(
         "--reasoning-check-mode",
         choices=("strict", "adaptive"),
         default="adaptive",
-        help="slow 轨迹 reasoning_content 过滤模式",
+        help="reasoning_content validation mode for slow trajectories",
     )
     parser.add_argument(
         "--reasoning-content-ratio-threshold",
         type=float,
         default=0.2,
-        help="adaptive 模式下 assistant 轮次包含 reasoning_content 的最低比例",
+        help="Minimum fraction of assistant turns with reasoning_content in adaptive mode",
     )
     return parser.parse_args()
 
@@ -161,7 +161,7 @@ def read_last_successful_jsonl_record(jsonl_path: Path) -> dict[str, Any] | None
 
 
 def _infer_think_mode(messages: list[dict[str, Any]]) -> str:
-    """根据 assistant 消息是否包含 reasoning_content 推断 think_mode。"""
+    """Infer think_mode from whether assistant messages contain reasoning_content."""
     for msg in messages:
         if msg.get("role") == "assistant" and msg.get("reasoning_content"):
             return "slow"
@@ -207,7 +207,7 @@ def convert_dataset(
             continue
         except (json.JSONDecodeError, OSError) as e:
             skipped_invalid += 1
-            print(f"读取轨迹失败 {instance_id}: {e}")
+            print(f"Failed to read trajectory for {instance_id}: {e}")
             continue
 
         if last_record is None:
@@ -219,7 +219,7 @@ def convert_dataset(
             messages, err = build_messages_from_logger_record(last_record)
         except (KeyError, TypeError, IndexError) as e:
             skipped_invalid += 1
-            print(f"解析轨迹失败 {instance_id}: {e}")
+            print(f"Failed to parse trajectory for {instance_id}: {e}")
             continue
 
         if err == 'no_choices':
@@ -261,7 +261,7 @@ def convert_dataset(
             metadata = load_task_metadata_from_trial(job_dir, folder_name)
         except (OSError, ValueError, KeyError, TypeError) as e:
             skipped_invalid += 1
-            print(f"读取 task metadata 失败 {instance_id}: {e}")
+            print(f"Failed to read task metadata for {instance_id}: {e}")
             continue
 
         im_data.append({
@@ -290,7 +290,7 @@ def main() -> None:
     args = parse_args()
     job_dir = args.job_dir
     if not job_dir.exists():
-        raise FileNotFoundError(f"Job 目录不存在: {job_dir}")
+        raise FileNotFoundError(f"Job directory does not exist: {job_dir}")
 
     max_samples: int | None = args.max_instances
     if max_samples is not None and max_samples <= 0:

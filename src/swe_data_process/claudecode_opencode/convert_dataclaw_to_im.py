@@ -284,18 +284,18 @@ def parse_args() -> argparse.Namespace:
         "--im-output",
         type=Path,
         required=True,
-        help="输出 IM JSONL 文件",
+        help="Output IM JSONL file",
     )
     parser.add_argument(
         "--lf-output",
         type=Path,
         required=True,
-        help="输出 LF JSON 文件",
+        help="Output LF JSON file",
     )
     parser.add_argument(
         "--tokenizer-name",
         default=DEFAULT_TOKENIZER_NAME,
-        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
+        help="Tokenizer name for conversion to LLaMA-Factory ShareGPT JSON",
     )
     parser.add_argument(
         "--system-prompt-json", type=Path,
@@ -310,7 +310,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
         default=EXCLUDED_REPOS_FILE,
-        help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
+        help="Path to the curated repository exclusion list bundled with the package",
     )
     return parser.parse_args()
 

@@ -205,7 +205,7 @@ def convert_one_record(record: dict[str, Any]) -> dict[str, Any]:
     if not out['messages']:
         raise ValueError("No assistant turn left after trimming trailing user message")
 
-    # 确保 user 消息和 assistant 消息交替出现，且以 assistant 消息结尾
+    # Ensure user and assistant messages alternate and end with an assistant.
     for i in range(len(out['messages'])):
         role = out['messages'][i]['role']
         if role not in ('user', 'assistant'):
@@ -217,7 +217,7 @@ def convert_one_record(record: dict[str, Any]) -> dict[str, Any]:
             if role != 'assistant':
                 raise ValueError(f"Expected assistant at index {i}, got {role}")
 
-    # 确保 assistant 消息可以被 json.loads 正确解析
+    # Ensure every assistant message can be parsed by json.loads.
     for i in range(1, len(out['messages']), 2):
         try:
             json.loads(extract_json_content_from_assistant(out['messages'][i]['content']))

@@ -72,7 +72,7 @@ class TestLoadJsonl:
         result = load_jsonl(f)
         assert len(result) == 1
 
-    def test_expands_panguml_compat_fields(self, tmp_path):
+    def test_expands_im_compat_fields(self, tmp_path):
         f = tmp_path / "data.jsonl"
         record = {
             "version": "2.0.0",

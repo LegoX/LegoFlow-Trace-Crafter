@@ -15,7 +15,7 @@ from swe_data_process.utils import (
     load_task_metadata_from_trial,
     save_jsonl,
     tag_instance_records,
-    to_panguml_v2_record,
+    to_im_v2_record,
 )
 
 
@@ -98,7 +98,7 @@ def test_tag_instance_records_attaches_metadata_to_all_records():
     assert all(record["_instance_metadata"] == metadata for record in records)
 
 
-def test_metadata_round_trips_through_panguml_im(tmp_path):
+def test_metadata_round_trips_through_im(tmp_path):
     output = tmp_path / "im.jsonl"
     metadata = {"difficulty": "easy", "tags": ["python"]}
     records = [{
@@ -116,9 +116,9 @@ def test_metadata_round_trips_through_panguml_im(tmp_path):
     assert load_jsonl(output)[0]["_instance_metadata"] == metadata
 
 
-def test_metadata_is_copied_to_lf_from_panguml_im():
+def test_metadata_is_copied_to_lf_from_im():
     metadata = {"difficulty": "easy", "tags": ["python"]}
-    im_record = to_panguml_v2_record({
+    im_record = to_im_v2_record({
         "messages": [
             {"role": "user", "content": "Fix the bug"},
             {"role": "assistant", "content": "Done"},

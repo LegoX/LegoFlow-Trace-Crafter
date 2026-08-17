@@ -10,11 +10,11 @@ from swe_data_process.utils import (
     _align_tool_call_ids,
     _extract_reasoning_from_content,
     _normalize_content_to_string,
-    _normalize_messages_for_panguml,
+    _normalize_messages_for_im,
     _normalize_tool_arguments,
     _normalize_tool_call,
-    _normalize_tools_for_panguml,
-    to_panguml_v2_record,
+    _normalize_tools_for_im,
+    to_im_v2_record,
 )
 
 
@@ -202,7 +202,7 @@ class TestNormalizeMessagesForPanguml:
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
         ]
-        result = _normalize_messages_for_panguml(messages)
+        result = _normalize_messages_for_im(messages)
         assert result[0]["role"] == "system"
         assert result[0]["content"] == ""
 
@@ -212,7 +212,7 @@ class TestNormalizeMessagesForPanguml:
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
         ]
-        result = _normalize_messages_for_panguml(messages)
+        result = _normalize_messages_for_im(messages)
         assert result[0]["content"] == "You are helpful."
 
     def test_assistant_reasoning_extracted(self):
@@ -220,7 +220,7 @@ class TestNormalizeMessagesForPanguml:
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "<think>reasoning</think>answer"},
         ]
-        result = _normalize_messages_for_panguml(messages)
+        result = _normalize_messages_for_im(messages)
         assistant = [m for m in result if m["role"] == "assistant"][0]
         assert assistant["reasoning_content"] == "reasoning"
         assert assistant["content"] == "answer"
@@ -234,7 +234,7 @@ class TestNormalizeMessagesForPanguml:
                 "reasoning_content": "explicit reasoning",
             },
         ]
-        result = _normalize_messages_for_panguml(messages)
+        result = _normalize_messages_for_im(messages)
         assistant = [m for m in result if m["role"] == "assistant"][0]
         assert assistant["reasoning_content"] == "explicit reasoning"
 
@@ -251,7 +251,7 @@ class TestNormalizeMessagesForPanguml:
             {"role": "tool", "content": "result", "tool_call_id": "c1"},
             {"role": "assistant", "content": "done"},
         ]
-        result = _normalize_messages_for_panguml(messages)
+        result = _normalize_messages_for_im(messages)
         tool_msg = [m for m in result if m["role"] == "tool"][0]
         assert tool_msg["tool_call_id"] == "c1"
 
@@ -261,7 +261,7 @@ class TestNormalizeMessagesForPanguml:
             "not a dict",
             {"role": "assistant", "content": "hello"},
         ]
-        result = _normalize_messages_for_panguml(messages)
+        result = _normalize_messages_for_im(messages)
         roles = [m["role"] for m in result]
         assert "not a dict" not in roles
 
@@ -278,7 +278,7 @@ class TestNormalizeToolsForPanguml:
                 },
             }
         ]
-        result = _normalize_tools_for_panguml(tools)
+        result = _normalize_tools_for_im(tools)
         assert len(result) == 1
         assert result[0]["function"]["name"] == "Read"
 
@@ -293,30 +293,30 @@ class TestNormalizeToolsForPanguml:
                 },
             }
         ]
-        result = _normalize_tools_for_panguml(tools)
+        result = _normalize_tools_for_im(tools)
         assert result[0]["function"]["parameters"] == {"type": "object", "properties": {}}
 
     def test_non_list_returns_empty(self):
-        assert _normalize_tools_for_panguml(None) == []
-        assert _normalize_tools_for_panguml("bad") == []
+        assert _normalize_tools_for_im(None) == []
+        assert _normalize_tools_for_im("bad") == []
 
     def test_tool_without_function_wrapper(self):
         tools = [{"name": "Read", "description": "Read", "parameters": {}}]
-        result = _normalize_tools_for_panguml(tools)
+        result = _normalize_tools_for_im(tools)
         assert len(result) == 1
         assert result[0]["function"]["name"] == "Read"
 
 
-class TestToPangumlV2Record:
+class TestToImV2Record:
     def test_structure(self, minimal_im_record):
-        result = to_panguml_v2_record(minimal_im_record)
+        result = to_im_v2_record(minimal_im_record)
         assert result["version"] == "2.0.0"
         assert "meta_info" in result
         assert "tools" in result
         assert "messages" in result
 
     def test_meta_info_fields(self, minimal_im_record):
-        result = to_panguml_v2_record(minimal_im_record)
+        result = to_im_v2_record(minimal_im_record)
         meta = result["meta_info"]
         assert "teacher" in meta
         assert "query_source" in meta
@@ -327,14 +327,14 @@ class TestToPangumlV2Record:
         assert "unique_info" in meta
 
     def test_messages_normalized(self, minimal_im_record):
-        result = to_panguml_v2_record(minimal_im_record)
+        result = to_im_v2_record(minimal_im_record)
         assert result["messages"][0]["role"] == "system"
         for msg in result["messages"]:
             if msg["role"] == "assistant":
                 assert "reasoning_content" in msg
 
     def test_tools_normalized(self, minimal_im_record):
-        result = to_panguml_v2_record(minimal_im_record)
+        result = to_im_v2_record(minimal_im_record)
         for tool in result["tools"]:
             assert tool["type"] == "function"
             assert "name" in tool["function"]
@@ -350,7 +350,7 @@ class TestToPangumlV2Record:
             "_instance_id": "owner__repo-123",
             "_agent_type": "main",
         }
-        result = to_panguml_v2_record(record)
+        result = to_im_v2_record(record)
         unique_info = result["meta_info"]["unique_info"]
         assert unique_info["_instance_id"] == "owner__repo-123"
         assert unique_info["_agent_type"] == "main"

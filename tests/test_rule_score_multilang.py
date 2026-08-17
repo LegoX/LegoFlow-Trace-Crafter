@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""rule_score.py 多编程语言回归测试.
+"""Multilanguage regression tests for rule_score.py.
 
-覆盖多语言（Java / C / C++ / Rust / Go / TypeScript / JavaScript / Ruby / Python）
-场景下 TVR 与 FEC 的跨语言口径一致性，以及测试结果判定（pass / unknown / fail）。
-每个用例的命令与输出形态都取自真实轨迹中出现过的写法。
+Verify consistent TVR and FEC behavior across Java, C, C++, Rust, Go,
+TypeScript, JavaScript, Ruby, and Python, including test outcome
+classification (pass / unknown / fail). Command and output fixtures use forms
+observed in real trajectories.
 
-运行:
+Run:
     pytest tests/test_rule_score_multilang.py
-    # 未安装包时也可直接运行：python3 tests/test_rule_score_multilang.py
+    # If the package is not installed: python3 tests/test_rule_score_multilang.py
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import sys
 
 
 def _load_rule_score():
-    """优先用已安装的包；未安装时回退到源码树里的 rule_score.py。"""
+    """Load the installed package, falling back to rule_score.py in the source tree."""
     try:
         from swe_data_process import rule_score
         return rule_score
@@ -42,8 +43,9 @@ def _load_rule_score():
 
 rs = _load_rule_score()
 
-# 脚手架回填的尾部标记。命令通常经过 `| tail -N`，管道使 shell 退出码
-# 恒为 tail 的 0，所以这个标记**永远是 0**，不能当作通过/失败信号。
+# Trailing markers injected by the scaffold. Commands commonly use `| tail -N`,
+# so the shell reports tail's status (always 0 here). These markers therefore
+# cannot indicate whether the test passed or failed.
 SCAFFOLD_TAIL = (
     "\n[The command completed with exit code 0.]"
     "\n[Current working directory: /app/src]"
@@ -52,18 +54,19 @@ SCAFFOLD_TAIL = (
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 1. ANSI 转义不得破坏模式匹配
+# 1. ANSI escapes must not disrupt pattern matching
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_ansi_does_not_break_word_boundary():
-    """`\\x1b[K` 里的 K 是 word 字符，会让 `\\bFAILED\\b` 失效。
+    """The word character K in `\\x1b[K` can break `\\bFAILED\\b` matching.
 
-    命令 observation 普遍含 ANSI（grep --color 与彩色 runner 的输出）。
+    Command observations commonly contain ANSI escapes from colored grep and
+    test-runner output.
     """
     ansi_failed = "[\x1b[01;31m\x1b[KFAILED\x1b[m\x1b[K] test_4"
     assert rs._is_error_result(ansi_failed) is True
 
-    # Maven 的真实形态：转义序列插在 "Tests run" 和 ":" 之间
+    # Real Maven output can insert escape sequences between "Tests run" and ":".
     ansi_mvn = "Tests run\x1b[m\x1b[K: 6, \x1b[01;31m\x1b[KFailures\x1b[m\x1b[K: 2"
     assert rs._test_run_outcome(ansi_mvn) == "fail"
 
@@ -73,22 +76,22 @@ def test_strip_ansi_is_noop_for_plain_text():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 2. 扫描窗口必须覆盖输出结尾（测试摘要在末尾）
+# 2. The scan window must include the output tail, where summaries appear
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_failure_at_end_of_long_output_is_detected():
-    """结论在末尾、正文很长时，只扫开头会系统性漏检。"""
+    """Scanning only the head of long output would consistently miss its conclusion."""
     long_fail = "x" * 5000 + "\nFAILED tests/test_a.py::test_x - AssertionError\n"
     assert rs._is_error_result(long_fail) is True
     assert rs._test_run_outcome(long_fail) == "fail"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 3. 多语言测试结果判定
+# 3. Multilanguage test outcome classification
 # ═══════════════════════════════════════════════════════════════════════════
 
 FAIL_OUTPUTS = {
-    # 关键：Go 与 Jest 只打 FAIL，不是 FAILED —— 旧的 `\bFAILED\b` 抓不到
+    # Go and Jest emit FAIL rather than FAILED, which `\bFAILED\b` cannot match.
     "go":         "ok  \tgithub.com/x/y\t0.02s\nFAIL\nexit: 1",
     "go_verbose": "--- FAIL: TestPRRevert (0.00s)\n    revert_test.go:12: got 1 want 2\nFAIL",
     "jest":       "Tests:       1 failed, 36 passed, 37 total",
@@ -118,7 +121,7 @@ PASS_OUTPUTS = {
     "gtest":     "[==========] 24 tests ran.\n[  PASSED  ] 24 tests.\nexit: 0",
     "jest":      "Test Suites: 1 passed, 1 total\nTests:       13 passed, 13 total",
     "pytest":    "===== 5 passed in 0.3s =====",
-    # Python unittest 的标准通过输出，旧实现完全没覆盖
+    # Standard successful Python unittest output was previously unsupported.
     "unittest":  "----------------------------------------\nRan 97 tests in 9.254s\n\nOK",
     "mocha":     "  1 passing (66ms)",
     "ruby":      "Total: 151 tests, 459 assertions\nPass: 148, fail: 0, skip: 3.",
@@ -129,16 +132,16 @@ PASS_OUTPUTS = {
 
 def test_multilang_failures_detected():
     for name, out in FAIL_OUTPUTS.items():
-        assert rs._test_run_outcome(out + SCAFFOLD_TAIL) == "fail", f"{name} 应判为 fail"
+        assert rs._test_run_outcome(out + SCAFFOLD_TAIL) == "fail", f"{name} should be fail"
 
 
 def test_multilang_passes_detected():
     for name, out in PASS_OUTPUTS.items():
-        assert rs._test_run_outcome(out + SCAFFOLD_TAIL) == "pass", f"{name} 应判为 pass"
+        assert rs._test_run_outcome(out + SCAFFOLD_TAIL) == "pass", f"{name} should be pass"
 
 
 def test_zero_counts_are_not_failures():
-    """`0 failed` / `0 failures` 是**通过**时的正常输出，绝不能判成失败。"""
+    """`0 failed` and `0 failures` are normal successful output, not failures."""
     for out in ("1 passed; 0 failed; 0 ignored",
                 "Tests run: 6, Failures: 0, Errors: 0",
                 "2 examples, 0 failures",
@@ -147,18 +150,18 @@ def test_zero_counts_are_not_failures():
 
 
 def test_zero_passed_is_not_a_pass_signal():
-    """`0 passed` 说明一个测试都没跑成，不能算通过。"""
+    """`0 passed` means no tests ran and must not indicate success."""
     assert rs._test_run_outcome("collected 0 items\n0 passed, 0 failed" + SCAFFOLD_TAIL) == "unknown"
     assert rs._test_run_outcome("===== 5 passed in 0.3s =====" + SCAFFOLD_TAIL) == "pass"
 
 
 def test_scaffold_exit_code_marker_is_not_a_pass_signal():
-    """脚手架回填的 `exit code 0` 因管道恒为 0，不能据此判通过。"""
+    """A scaffold `exit code 0` marker reflects the pipeline, not test success."""
     assert rs._test_run_outcome("some log output" + SCAFFOLD_TAIL) == "unknown"
 
 
 def test_http_status_200_is_not_an_exit_code():
-    """`status: 200` 不能被当成非零退出码。"""
+    """`status: 200` must not be interpreted as a nonzero exit status."""
     assert rs._test_run_outcome("HTTP status: 200\n5 passed" + SCAFFOLD_TAIL) == "pass"
 
 
@@ -167,61 +170,61 @@ def test_failure_wins_over_partial_pass():
 
 
 def test_explicit_pass_beats_incidental_soft_error_token():
-    """通过的测试完全可能在输出里合法打印 TypeError（正是它在测的错误路径）。"""
+    """A passing test may legitimately print TypeError while testing an error path."""
     out = "caught TypeError as expected\n100% tests passed, 0 tests failed out of 3"
     assert rs._test_run_outcome(out + SCAFFOLD_TAIL) == "pass"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 4. 测试执行命令识别
+# 4. Test command detection
 # ═══════════════════════════════════════════════════════════════════════════
 
 TEST_RUN_CASES = [
-    # (命令, 是否算测试执行)
-    # --- Maven/Gradle 的常见形态：goal 与命令之间隔着 flag 和模块选择器 ---
+    # (command, whether it counts as test execution)
+    # --- Common Maven/Gradle forms with flags and module selectors before the goal ---
     ("cd /app/src && timeout 600 ./mvnw -q -pl mod -am test -Dtest=FooTest 2>&1 | tail", True),
     ("cd /app/src/main/keychain && timeout 180 mvn -o -q test 2>&1 | tail -30", True),
     ("timeout 900 ./gradlew -q :core:test --tests '*.FooTest'", True),
     ("cd /app/src && timeout 600 mvn clean install -DskipTests", False),
-    ("./gradlew build -x test", False),          # -x 是排除 test
+    ("./gradlew build -x test", False),          # -x excludes the test task.
     ("mvn -version", False),
-    # --- 各语言 runner ---
+    # --- Test runners across languages ---
     ("cd /app/src && go test ./... 2>&1 | tail -40", True),
     ("cd /app/src && cargo test -p rye --test test_sync", True),
     ("cd /app/src/build && ctest --output-on-failure 2>&1 | tail -40; echo \"exit: ${PIPESTATUS[0]}\"", True),
     ("/opt/venv/bin/python -m pytest tests/ -q", True),
     ("cd /app/src && npx vitest run", True),
     ("for f in a b; do go test $f; done", True),
-    # --- Django（旧实现三种写法全漏）---
+    # --- Django forms that were all missed previously ---
     ("./tests/runtests.py --settings=test_sqlite", True),
     ("python tests/runtests.py auth", True),
     ("python manage.py test", True),
     ("python manage.py runserver", False),
-    # --- 「跑一遍程序」口径：既定设计，但需对所有语言一致 ---
+    # --- Running a program once counts as verification, consistently across languages ---
     ("go run main.go", True),
     ("cargo run", True),
     ("java -cp \"$CP\" MyRepro", True),
     ("ruby app.rb", True),
-    ("python app.py", True),        # 旧实现漏（Python 被排除在该口径外）
-    ("node server.js", True),       # 旧实现漏（Node 被排除在该口径外）
-    # --- 安装/打包/起服务不算验证 ---
-    ("pip install -e . && python -m pytest", True),   # 链里有 pytest 仍算
+    ("python app.py", True),        # Previously missed because Python was excluded.
+    ("node server.js", True),       # Previously missed because Node was excluded.
+    # --- Installation, packaging, and service startup are not verification ---
+    ("pip install -e . && python -m pytest", True),   # The pytest segment still counts.
     ("python setup.py build", False),
     ("npm run dev", False),
     ("yarn build", False),
     ("cargo build --release", False),
     ("go build ./...", False),
-    # --- 假阳性：命令头是只读工具，不能因路径/文件名命中 ---
+    # --- Avoid false positives from paths or filenames in read-only commands ---
     ("cd /app/src && git diff a/src/main/java/org/x/TaskExecuteThread.java", False),
     ("cd /app/src && rm -f vitest-wiki-tmp.config.ts && git status --short", False),
     ("rm -f /tmp/verify_constraints.c /tmp/verify_constraints && echo cleaned", False),
     ("cat settings.gradle.kts | grep -i 'jupiter\\|junit' | head", False),
     ("grep -n 'go test' Makefile", False),
     ("cd /app/src && grep -rn 'EchoStrategy' src/test/", False),
-    # --- python -c 被大量用来改文件，那是编辑不是自测 ---
+    # --- python -c commonly edits files; that is editing, not inline verification ---
     ("cd /app/src && python3 -c \"\np='pom.xml'; s=open(p).read()\nopen(p,'w').write(s)\n\"", False),
     ("cd /app/src && python3 -c \"import x; assert x.f()==1; print('ok')\"", True),
-    # --- 纯读取 ---
+    # --- Read-only commands ---
     ("ls -la", False),
     ("git diff", False),
 ]
@@ -229,18 +232,18 @@ TEST_RUN_CASES = [
 
 def test_test_run_command_detection():
     for cmd, expected in TEST_RUN_CASES:
-        assert rs._is_test_run_cmd(cmd) is expected, f"{cmd!r} 期望 {expected}"
+        assert rs._is_test_run_cmd(cmd) is expected, f"{cmd!r} expected {expected}"
 
 
 def test_formal_runner_detection_excludes_readonly_heads():
-    """错误抑制路径用的严格口径同样要逐段判定。"""
+    """Strict detection for error suppression must also inspect each segment."""
     assert rs._is_formal_test_run_cmd("cd /app && go test ./...") is True
     assert rs._is_formal_test_run_cmd("rm -f vitest-tmp.config.ts") is False
     assert rs._is_formal_test_run_cmd("grep -n 'pytest' tox.ini") is False
 
 
 def test_quote_aware_segment_split():
-    """引号内的 ; 和 && 不是命令分隔符。"""
+    """Semicolons and && inside quotes are not command separators."""
     segs = rs._split_shell_segments("python3 -c \"a='x'; b=1\" && echo done")
     assert len(segs) == 2, segs
 
@@ -252,7 +255,7 @@ def test_segment_head_strips_wrappers_and_paths():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 5. 测试文件识别（多语言）
+# 5. Multilanguage test-file detection
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_test_file_paths_multilang():
@@ -263,34 +266,34 @@ def test_test_file_paths_multilang():
         "src/test/java/com/x/FooTest.java", "FooSpec.scala",
         "src/a.test.ts", "src/__tests__/a.tsx",
         "spec/models/user_spec.rb", "test/user_test.rb",
-        "src/FooTest.php",     # 旧实现漏：Tests? 后缀集只挂了 java/kt/kts/scala
-        "FooTests.cs",         # 旧实现漏
-        "t/basic.t",           # 旧实现漏：Perl 惯例
+        "src/FooTest.php",     # Previously missed: Tests? suffixes covered only JVM languages.
+        "FooTests.cs",         # Previously missed.
+        "t/basic.t",           # Previously missed Perl convention.
     ]
     for p in positives:
-        assert rs._is_test_file_path(p) is True, f"{p} 应识别为测试文件"
+        assert rs._is_test_file_path(p) is True, f"{p} should be recognized as a test file"
 
     negatives = ["src/main.py", "src/lib.rs", "README.md", "pom.xml", "src/app/service.ts"]
     for p in negatives:
-        assert rs._is_test_file_path(p) is False, f"{p} 不应识别为测试文件"
+        assert rs._is_test_file_path(p) is False, f"{p} should not be recognized as a test file"
 
 
 def test_words_ending_in_test_are_not_test_files():
-    """*Test 后缀判据本质是 CamelCase 大小写，不能大小写不敏感地匹配。
+    """The *Test suffix rule requires CamelCase and must remain case-sensitive.
 
-    否则 latest / greatest / contest / attest 等普通文件名会因词尾恰好是 "test"
-    被误判成测试文件（这是放宽后缀语言集时极易引入的回归）。
+    Otherwise, ordinary names such as latest, greatest, contest, and attest
+    would be misclassified merely because they end in "test".
     """
     for p in ["latest.py", "greatest.go", "fastest.rs", "contest.js",
               "protest.ts", "attest.go", "latest.java", "request.go"]:
-        assert rs._is_test_file_path(p) is False, f"{p} 不应识别为测试文件"
-    # CamelCase 的真测试文件仍需命中
+        assert rs._is_test_file_path(p) is False, f"{p} should not be recognized as a test file"
+    # Actual CamelCase test files must still match.
     for p in ["FooTest.php", "FooTests.cs", "UserSpec.kt", "MyServiceTest.java"]:
-        assert rs._is_test_file_path(p) is True, f"{p} 应识别为测试文件"
+        assert rs._is_test_file_path(p) is True, f"{p} should be recognized as a test file"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 6. FEC：编辑提取不得有盲区，且盲区不能反向加分
+# 6. FEC edit extraction must not miss edits or reward detection gaps
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _tc(name, args):
@@ -299,7 +302,7 @@ def _tc(name, args):
 
 
 def test_fec_catches_renamed_shell_ipython_and_multiedit():
-    """旧实现用工具名单 + args['command']，这三种编辑一个都抓不到。"""
+    """The old tool-name plus args['command'] logic missed all three edit forms."""
     msgs = [{"role": "assistant", "tool_calls": [
         _tc("shell_exec", {"command": "sed -i 's/a/b/' src/main.go"}),
         _tc("execute_ipython_cell", {"code": "open('x.py','w').write('1')"}),
@@ -313,7 +316,7 @@ def test_fec_catches_renamed_shell_ipython_and_multiedit():
 
 
 def test_fec_returns_none_when_no_edits_detected():
-    """「没检测到编辑」必须走 fail-soft，而不是当成完美集中度给满分。"""
+    """No detected edits must fail soft, not receive a perfect concentration score."""
     msgs = [{"role": "assistant", "content": "just thinking"}]
     assert rs._compute_fec(msgs, "openhands") is None
 
@@ -327,22 +330,22 @@ def test_bash_edit_idioms_multilang():
     cases = [
         ("sed -i 's/a/b/' src/main.go", ["src/main.go"]),
         ("sed -i.bak 's/a/b/' src/x.c", ["src/x.c"]),
-        ("gsed -i 's/a/b/' a.js", ["a.js"]),                  # 旧实现漏
-        ("perl -pi -e 's/a/b/' src/x.pl", ["src/x.pl"]),      # 旧实现漏
+        ("gsed -i 's/a/b/' a.js", ["a.js"]),                  # Previously missed.
+        ("perl -pi -e 's/a/b/' src/x.pl", ["src/x.pl"]),      # Previously missed.
         ("cat > pkg/foo_test.go <<'EOF'", ["pkg/foo_test.go"]),
         ("printf 'x' >> src/a.rs", ["src/a.rs"]),
-        ("sed -n '1,60p' file.py", []),                       # 只读，不是编辑
-        # `-MList::Util` 里含 i，不能被当成 `-i` 就地编辑
+        ("sed -n '1,60p' file.py", []),                       # Read-only, not an edit.
+        # The i in `-MList::Util` must not be mistaken for an in-place `-i`.
         ("perl -MList::Util -e 'print 1' file.py", []),
         ("perl -pi.orig -e 's/a/b/' x.pl", ["x.pl"]),
-        ("sed -i -f script.sed src/a.go", ["src/a.go"]),      # -f 的参数是脚本不是目标
+        ("sed -i -f script.sed src/a.go", ["src/a.go"]),      # The -f argument is a script.
     ]
     for cmd, expected in cases:
         assert rs._extract_bash_edit_paths(cmd) == expected, cmd
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 7. TVR 端到端
+# 7. End-to-end TVR behavior
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _traj(cmd, obs):
@@ -354,37 +357,37 @@ def _traj(cmd, obs):
 
 
 def test_tvr_go_failure_no_longer_outscores_python_failure():
-    """核心回归：同样是「跑了测试且测试挂了」，Go 不该比 Python 拿更高分。"""
+    """Equivalent failed Go and Python test runs must receive the same score."""
     go = rs._compute_tvr(_traj("go test ./...", "ok x\nFAIL" + SCAFFOLD_TAIL), "openhands")
     py = rs._compute_tvr(_traj("python -m pytest", "FAILED t.py::x - AssertionError" + SCAFFOLD_TAIL), "openhands")
     assert go == py, f"go={go} python={py}"
 
 
 def test_tvr_stale_observation_not_reused_on_truncation():
-    """最后一次测试没有对应 observation 时，不能沿用上一次测试的结果。"""
+    """A truncated final test run must not reuse the previous observation."""
     msgs = [
         {"role": "assistant", "tool_calls": [_tc("terminal", {"command": "pytest"})]},
         {"role": "tool", "content": "5 passed" + SCAFFOLD_TAIL},
-        # 第二次测试被截断，没有 tool 响应
+        # The second test run is truncated before its tool response.
         {"role": "assistant", "tool_calls": [_tc("terminal", {"command": "pytest"})]},
     ]
     tvr = rs._compute_tvr(msgs, "openhands")
-    # 0.3(run) + 0.4*0.6(unknown) = 0.54，而不是沿用上次的 pass 拿 0.7
+    # 0.3 (run) + 0.4 * 0.6 (unknown) = 0.54, not 0.7 from reusing the prior pass.
     assert abs(tvr - 0.54) < 1e-9, tvr
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# 第二轮 code review 发现的问题（2026-07-29）
+# Issues found in the second code review (2026-07-29)
 # ───────────────────────────────────────────────────────────────────────────
 
 def _renamed_shell_traj(tool_name):
-    """两次 shell 编辑 + 文本收尾；工具名可替换，用于验证改名鲁棒性。"""
+    """Build two shell edits plus a text conclusion to test tool-name robustness."""
     import json
     return {
         "tools": [{"type": "function", "function": {
             "name": tool_name,
-            # 只声明 command —— _infer_canonical_name 无法据此归一，
-            # 因此所有依赖工具名单的路径都必须自己扛住。
+            # Declaring only command prevents _infer_canonical_name from
+            # canonicalizing this tool, so downstream paths must handle it.
             "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
         }}],
         "messages": [
@@ -401,10 +404,10 @@ def _renamed_shell_traj(tool_name):
 
 
 def test_renamed_shell_tool_scores_identically_to_execute_bash():
-    """改名 shell 工具不得因为「名字不在 _BASH_TOOL_NAMES」而被扣分。
+    """A renamed shell tool must not lose points because its name is unknown.
 
-    修复前：DPI 1.0 -> 0.6（误判从未成功写入，-0.40），SCP 1.0 -> 0.0，
-    composite 0.5857 -> 0.5309，差异纯粹来自工具名。
+    Before the fix, a false "never successfully wrote" result changed DPI from
+    1.0 to 0.6, SCP from 1.0 to 0.0, and the composite from 0.5857 to 0.5309.
     """
     std = rs.score_record(_renamed_shell_traj("execute_bash"))
     ren = rs.score_record(_renamed_shell_traj("shell_exec"))
@@ -421,17 +424,17 @@ def test_has_successful_write_survives_tool_rename():
 
 
 def test_scan_window_tail_aligns_to_line_start():
-    """尾窗不得从行中间切开 —— 否则会伪造出行首，让 ^FAILED/^FAIL/^[ERROR] 误命中。"""
+    """The tail window must not create false line starts by splitting a line."""
     filler = "x" * 8000
     body = filler + "The state was FAILED: cleanup done\n" + "y" * 2960 + "\n"
     assert len(body) > 6000
     win = rs._scan_window(body)
-    assert "FAILED: cleanup done" not in win.split("\n", 1)[-1][3000:], "残行未被丢弃"
+    assert "FAILED: cleanup done" not in win.split("\n", 1)[-1][3000:], "partial line was not dropped"
     assert rs._test_run_outcome(body) == "unknown"
 
 
 def test_zero_counts_are_not_pass_signals():
-    """一个测试都没跑成不是「通过」，应为 unknown。"""
+    """A run that executes no tests is unknown, not a pass."""
     for text in [
         "  0 passing (2ms)",
         "Pass: 0, fail: 0, error: 0",
@@ -450,7 +453,7 @@ def test_zero_counts_are_not_pass_signals():
 
 
 def test_negative_exit_codes_count_as_failure():
-    """超时/信号杀死时脚手架回填负退出码，缺 `-?` 会整类漏判成 unknown。"""
+    """Negative timeout or signal exit codes must be classified as failures."""
     assert rs._test_run_outcome("[The command completed with exit code -1.]") == "fail"
     assert rs._test_run_outcome("[The command completed with exit code -9.]") == "fail"
     assert rs._test_run_outcome("[The command completed with exit code 0.]") != "fail"

@@ -23,12 +23,13 @@ class TestFilterFailedRecords:
         assert [r["id"] for r in filter_failed_records(records)] == [1, 3]
 
     def test_missing_field_kept(self):
-        # 兼容旧 logger：缺 success 字段视为成功
+        # Older logger records without a success field count as successful.
         records = [{"id": 1}, {"success": False, "id": 2}, {"id": 3}]
         assert [r["id"] for r in filter_failed_records(records)] == [1, 3]
 
     def test_truthy_non_false_kept(self):
-        # 只对显式 False 过滤，其它值（如 None、"false" 字符串）保守保留
+        # Drop only explicit False; conservatively retain values such as None
+        # and the string "false".
         records = [
             {"success": None, "id": 1},
             {"success": "false", "id": 2},
@@ -40,10 +41,11 @@ class TestFilterFailedRecords:
 
 class TestDeduplicateTrajectoriesFiltersFailed:
     def test_failed_record_filtered_before_dedup(self, tmp_path: Path):
-        # 模拟 3 条记录：成功的 2 条（前缀关系）+ 失败的 1 条
+        # Simulate two successful records with a prefix relationship and one
+        # failed record.
         traj = tmp_path / "traj.jsonl"
         rows = [
-            # success=False，要被过滤
+            # success=False must be filtered.
             {
                 "success": False,
                 "request_time": 100,
@@ -54,7 +56,7 @@ class TestDeduplicateTrajectoriesFiltersFailed:
                     {"role": "assistant", "content": "BAD"},
                 ]},
             },
-            # 成功的短上下文
+            # Successful shorter context.
             {
                 "success": True,
                 "request_time": 200,
@@ -64,7 +66,7 @@ class TestDeduplicateTrajectoriesFiltersFailed:
                     {"role": "user", "content": "u2"},
                 ]},
             },
-            # 成功的更长上下文（应作为最长扩展保留）
+            # Successful longer context, retained as the longest extension.
             {
                 "success": True,
                 "request_time": 300,
@@ -81,7 +83,8 @@ class TestDeduplicateTrajectoriesFiltersFailed:
 
         result = deduplicate_trajectories(traj)
 
-        # 失败行直接丢；成功短的被成功长的作为前缀覆盖；只剩最长那条
+        # The failed row is dropped, and the longer successful row supersedes
+        # the shorter prefix, leaving only the longest trajectory.
         assert len(result) == 1
         assert result[0]["request_time"] == 300
         assert result[0]["success"] is True

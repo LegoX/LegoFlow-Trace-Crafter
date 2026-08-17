@@ -63,9 +63,9 @@ def process_tool_call(tool_calls: Any) -> list[dict[str, Any]]:
 def list_sorted_json_files(folder_path: Path) -> list[str]:
     """List JSON filenames in *folder_path* sorted by embedded timestamp."""
     if not folder_path.exists():
-        raise FileNotFoundError(f"文件夹路径不存在: {folder_path}")
+        raise FileNotFoundError(f"Folder path does not exist: {folder_path}")
     if not folder_path.is_dir():
-        raise NotADirectoryError(f"路径不是文件夹: {folder_path}")
+        raise NotADirectoryError(f"Path is not a folder: {folder_path}")
 
     files = [f.name for f in folder_path.iterdir() if f.suffix == '.json']
 

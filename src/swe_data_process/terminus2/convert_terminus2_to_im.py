@@ -20,47 +20,47 @@ from swe_data_process.utils import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="将 terminus2 Harbor job 目录下的 agent/trajectory.json 转为 IM / LF 数据"
+        description="Convert agent/trajectory.json files in a Terminus2 Harbor job to IM and LF data"
     )
     parser.add_argument(
         "--job-dir",
         type=Path,
         required=True,
-        help="Harbor job 目录",
+        help="Harbor job directory",
     )
     parser.add_argument(
         "--im-output",
         type=Path,
         required=True,
-        help="输出 IM JSONL 文件",
+        help="Output IM JSONL file",
     )
     parser.add_argument(
         "--lf-output",
         type=Path,
         required=True,
-        help="输出 LF JSON 文件",
+        help="Output LF JSON file",
     )
     parser.add_argument(
         "--tokenizer-name",
         default=DEFAULT_TOKENIZER_NAME,
-        help="转换为 LLaMA-Factory sharegpt 格式 JSON 时使用的 tokenizer 名称",
+        help="Tokenizer name for conversion to LLaMA-Factory ShareGPT JSON",
     )
     parser.add_argument(
         "--max-instances",
         type=int,
         default=None,
-        help="最多成功转换多少条，默认不限制",
+        help="Maximum number of successfully converted records (default: unlimited)",
     )
     parser.add_argument(
         "--instance-status",
         choices=("resolved", "unresolved", "all"),
         default="resolved",
-        help="选择处理 resolved、unresolved 或全部实例，默认 resolved",
+        help="Select resolved, unresolved, or all instances (default: resolved)",
     )
     parser.add_argument(
         "--exclude-repos-file", type=lambda s: Path(s) if s else None,
         default=EXCLUDED_REPOS_FILE,
-        help="排除 repo 列表文件路径（由 generate_excluded_repos.py 生成）",
+        help="Path to the curated repository exclusion list bundled with the package",
     )
     return parser.parse_args()
 
@@ -69,7 +69,7 @@ def main() -> None:
     args = parse_args()
     job_dir = args.job_dir
     if not job_dir.exists():
-        raise FileNotFoundError(f"Job 目录不存在: {job_dir}")
+        raise FileNotFoundError(f"Job directory does not exist: {job_dir}")
 
     output_im_path = args.im_output
     output_lf_path = args.lf_output

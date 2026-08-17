@@ -124,14 +124,14 @@ class TestInferLanguageCode:
         assert infer_language_code(messages) == "en"
 
     def test_chinese(self):
-        messages = [{"role": "user", "content": "修复这个错误"}]
+        messages = [{"role": "user", "content": "\u4fee\u590d\u8fd9\u4e2a\u9519\u8bef"}]
         assert infer_language_code(messages) == "zh"
 
     def test_empty_messages(self):
         assert infer_language_code([]) == "en"
 
     def test_no_user_messages(self):
-        messages = [{"role": "assistant", "content": "你好"}]
+        messages = [{"role": "assistant", "content": "\u4f60\u597d"}]
         assert infer_language_code(messages) == "en"
 
     def test_first_user_with_empty_content(self):

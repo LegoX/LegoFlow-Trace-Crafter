@@ -8,12 +8,12 @@ def join_text_parts(parts: list[str]) -> str:
     return "\n\n".join(cleaned)
 
 
-# 部分原始轨迹用字面量 "(empty)" 表示无正文，与空字符串语义一致
+# Some source trajectories use the literal "(empty)" for an empty body.
 _ASSISTANT_EMPTY_PLACEHOLDER = "(empty)"
 
 
 def normalize_assistant_empty_content(messages: list[dict[str, Any]]) -> None:
-    """将 assistant 的 content 为 '(empty)' 的占位符统一为 ''。"""
+    """Normalize the assistant content placeholder '(empty)' to an empty string."""
     for msg in messages:
         if msg.get("role") != "assistant":
             continue
