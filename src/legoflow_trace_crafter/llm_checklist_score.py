@@ -20,7 +20,7 @@ References:
 
 Usage:
   Set OPENAI_API_KEY and, if needed, OPENAI_BASE_URL in the environment.
-  python -m swe_data_process.llm_checklist_score \
+  python -m legoflow_trace_crafter.llm_checklist_score \
       --input outputs/trajectories.im.jsonl \
       --output outputs/trajectories.checklist-scored.jsonl \
       --model gpt-4o-mini --concurrency 8
@@ -39,8 +39,8 @@ from typing import Any
 
 from tqdm import tqdm
 
-from swe_data_process.llm_client import LLMClient
-from swe_data_process.utils import load_jsonl, save_jsonl
+from legoflow_trace_crafter.llm_client import LLMClient
+from legoflow_trace_crafter.utils import load_jsonl, save_jsonl
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -7,7 +7,7 @@ rule_score.py and writes results to the _score dict with an llm_ prefix.
 
 Usage:
   Set OPENAI_API_KEY and, if needed, OPENAI_BASE_URL in the environment.
-  python -m swe_data_process.llm_score \
+  python -m legoflow_trace_crafter.llm_score \
       --input outputs/trajectories.im.jsonl \
       --output outputs/trajectories.llm-scored.jsonl \
       --model gpt-4o --concurrency 10
@@ -25,8 +25,8 @@ from typing import Any
 
 from tqdm import tqdm
 
-from swe_data_process.llm_client import LLMClient, MODEL_RATES, _DEFAULT_RATE
-from swe_data_process.utils import load_jsonl, save_jsonl
+from legoflow_trace_crafter.llm_client import LLMClient, MODEL_RATES, _DEFAULT_RATE
+from legoflow_trace_crafter.utils import load_jsonl, save_jsonl
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Checklist definition (v2) — 5 categories, 15 checks, 1-5 scoring

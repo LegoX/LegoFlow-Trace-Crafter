@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from swe_data_process.utils import (
+from legoflow_trace_crafter.utils import (
     _align_tool_call_ids,
     _extract_reasoning_from_content,
     _normalize_content_to_string,

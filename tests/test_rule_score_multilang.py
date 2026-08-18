@@ -19,7 +19,7 @@ import sys
 def _load_rule_score():
     """Load the installed package, falling back to rule_score.py in the source tree."""
     try:
-        from swe_data_process import rule_score
+        from legoflow_trace_crafter import rule_score
         return rule_score
     except ImportError:
         pass
@@ -28,13 +28,13 @@ def _load_rule_score():
     import types
     from pathlib import Path
 
-    src = Path(__file__).resolve().parent.parent / "src" / "swe_data_process" / "rule_score.py"
-    if "swe_data_process" not in sys.modules:
-        pkg = types.ModuleType("swe_data_process")
-        utils = types.ModuleType("swe_data_process.utils")
+    src = Path(__file__).resolve().parent.parent / "src" / "legoflow_trace_crafter" / "rule_score.py"
+    if "legoflow_trace_crafter" not in sys.modules:
+        pkg = types.ModuleType("legoflow_trace_crafter")
+        utils = types.ModuleType("legoflow_trace_crafter.utils")
         utils.load_jsonl = utils.save_jsonl = lambda *a, **k: None
-        sys.modules["swe_data_process"] = pkg
-        sys.modules["swe_data_process.utils"] = utils
+        sys.modules["legoflow_trace_crafter"] = pkg
+        sys.modules["legoflow_trace_crafter.utils"] = utils
     spec = importlib.util.spec_from_file_location("_rs", src)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

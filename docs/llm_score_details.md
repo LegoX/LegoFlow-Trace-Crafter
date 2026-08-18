@@ -1,6 +1,6 @@
 # Fixed-Checklist LLM Scoring
 
-`swe_data_process.llm_score` evaluates IM trajectories with one fixed 15-item checklist and an OpenAI-compatible chat API. It complements deterministic [TQS V2 rule scoring](rule_score_details.md); its fields are merged into the same `_score` object with an `llm_` prefix.
+`legoflow_trace_crafter.llm_score` evaluates IM trajectories with one fixed 15-item checklist and an OpenAI-compatible chat API. It complements deterministic [TQS V2 rule scoring](rule_score_details.md); its fields are merged into the same `_score` object with an `llm_` prefix.
 
 ## Checklist
 
@@ -87,7 +87,7 @@ pip install -e '.[llm]'
 Set `OPENAI_API_KEY`. Set `OPENAI_BASE_URL` only when using a compatible non-default endpoint.
 
 ```bash
-python -m swe_data_process.llm_score \
+python -m legoflow_trace_crafter.llm_score \
   --input outputs/trajectories.im.jsonl \
   --output outputs/trajectories.llm-scored.jsonl \
   --model gpt-4o \

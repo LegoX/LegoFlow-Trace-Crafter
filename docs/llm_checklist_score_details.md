@@ -1,6 +1,6 @@
 # Dynamic-Checklist LLM Scoring
 
-`swe_data_process.llm_checklist_score` generates a checklist from each trajectory's task context and then evaluates the trajectory against that checklist. The implementation labels this format `octobench-aligned-v2`.
+`legoflow_trace_crafter.llm_checklist_score` generates a checklist from each trajectory's task context and then evaluates the trajectory against that checklist. The implementation labels this format `octobench-aligned-v2`.
 
 This scorer uses an OpenAI-compatible chat API and writes `llm_checklist_` fields into the existing `_score` object.
 
@@ -109,7 +109,7 @@ Install the optional API dependency and set `OPENAI_API_KEY`. Set `OPENAI_BASE_U
 ```bash
 pip install -e '.[llm]'
 
-python -m swe_data_process.llm_checklist_score \
+python -m legoflow_trace_crafter.llm_checklist_score \
   --input outputs/trajectories.im.jsonl \
   --output outputs/trajectories.checklist-scored.jsonl \
   --model gpt-4o-mini \
@@ -119,7 +119,7 @@ python -m swe_data_process.llm_checklist_score \
 Use separate models when needed:
 
 ```bash
-python -m swe_data_process.llm_checklist_score \
+python -m legoflow_trace_crafter.llm_checklist_score \
   --input outputs/trajectories.im.jsonl \
   --checklist-model <generator-model> \
   --judge-model <judge-model>

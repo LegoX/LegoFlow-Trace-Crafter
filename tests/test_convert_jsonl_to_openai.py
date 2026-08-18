@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from swe_data_process.claudecode_opencode.convert_jsonl_to_openai import (
+from legoflow_trace_crafter.claudecode_opencode.convert_jsonl_to_openai import (
     convert_assistant_blocks,
     convert_message,
     convert_record,

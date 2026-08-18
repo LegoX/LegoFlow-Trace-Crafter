@@ -24,7 +24,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from swe_data_process.utils import save_jsonl
+from legoflow_trace_crafter.utils import save_jsonl
 
 
 def get_input_data(item: dict[str, Any]) -> Any:

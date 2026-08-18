@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from swe_data_process.terminus2.common import convert_one_record, iter_records, to_lf_record
-from swe_data_process.rule_score import score_dataset
-from swe_data_process.utils import (
+from legoflow_trace_crafter.terminus2.common import convert_one_record, iter_records, to_lf_record
+from legoflow_trace_crafter.rule_score import score_dataset
+from legoflow_trace_crafter.utils import (
     DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     extract_instance_id_from_config,

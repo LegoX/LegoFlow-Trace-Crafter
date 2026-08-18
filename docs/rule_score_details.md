@@ -1,6 +1,6 @@
 # TQS V2 Rule Scoring
 
-`swe_data_process.rule_score` assigns deterministic trajectory-quality metrics to IM records. All converters call the same scorer automatically, and it can also be run on an existing IM JSONL file.
+`legoflow_trace_crafter.rule_score` assigns deterministic trajectory-quality metrics to IM records. All converters call the same scorer automatically, and it can also be run on an existing IM JSONL file.
 
 Scoring does not filter records. Main-agent records receive an `_score` object; records tagged with `_agent_type: "subagent"` receive `_score: null`.
 
@@ -150,7 +150,7 @@ Persisted IM places this object at `meta_info.unique_info._score`. The JSONL loa
 ## Command line
 
 ```bash
-python -m swe_data_process.rule_score \
+python -m legoflow_trace_crafter.rule_score \
   --input outputs/trajectories.im.jsonl \
   --output outputs/trajectories.rule-scored.jsonl
 ```

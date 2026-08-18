@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from swe_data_process.rule_score import (
+from legoflow_trace_crafter.rule_score import (
     _compute_fec,
     _compute_stp,
     _compute_sub,

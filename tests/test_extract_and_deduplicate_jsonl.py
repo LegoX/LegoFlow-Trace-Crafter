@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from swe_data_process.claudecode_opencode.extract_and_deduplicate_jsonl import (
+from legoflow_trace_crafter.claudecode_opencode.extract_and_deduplicate_jsonl import (
     deduplicate_trajectories,
     filter_failed_records,
 )

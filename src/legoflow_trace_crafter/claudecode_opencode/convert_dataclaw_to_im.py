@@ -35,11 +35,11 @@ from typing import Any
 
 from tqdm import tqdm
 
-from swe_data_process.claudecode_opencode.convert_jsonl_to_openai import (
+from legoflow_trace_crafter.claudecode_opencode.convert_jsonl_to_openai import (
     normalize_tool_definition,
 )
-from swe_data_process.rule_score import score_dataset
-from swe_data_process.utils import (
+from legoflow_trace_crafter.rule_score import score_dataset
+from legoflow_trace_crafter.utils import (
     DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     ProcessSummary,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from swe_data_process.utils import check_reasoning_content, check_roles
+from legoflow_trace_crafter.utils import check_reasoning_content, check_roles
 
 
 class TestCheckRoles:

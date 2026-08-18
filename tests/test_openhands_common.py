@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from swe_data_process.openhands.common import (
+from legoflow_trace_crafter.openhands.common import (
     add_reasoning_content_to_json_data,
     extract_text,
     list_sorted_json_files,

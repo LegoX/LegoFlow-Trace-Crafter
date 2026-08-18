@@ -1,6 +1,6 @@
-# swe-data-process
+# LegoFlow-Trace-Crafter
 
-`swe-data-process` converts software-engineering agent trajectories into:
+LegoFlow-Trace-Crafter (`legoflow-trace-crafter`) converts software-engineering agent trajectories into:
 
 - intermediate message (IM) JSONL with normalized messages, tool calls, metadata, and trajectory scores;
 - LLaMA-Factory-oriented LF JSON with a statistics sidecar.
@@ -28,12 +28,12 @@ pip install -e '.[llm]'
 
 The package includes converters for:
 
-- Claude Code Harbor jobs: `swe_data_process.claudecode_opencode.convert_cc_to_im`
-- OpenCode Harbor jobs: `swe_data_process.claudecode_opencode.convert_oc_to_im`
-- OpenHands SDK Harbor jobs: `swe_data_process.openhands.convert_openhands_sdk_to_im`
-- Terminus2 Harbor jobs: `swe_data_process.terminus2.convert_terminus2_to_im`
-- Claude Code session JSONL: `swe_data_process.claudecode_opencode.convert_cc_session_to_im`
-- DataClaw conversation JSONL: `swe_data_process.claudecode_opencode.convert_dataclaw_to_im`
+- Claude Code Harbor jobs: `legoflow_trace_crafter.claudecode_opencode.convert_cc_to_im`
+- OpenCode Harbor jobs: `legoflow_trace_crafter.claudecode_opencode.convert_oc_to_im`
+- OpenHands SDK Harbor jobs: `legoflow_trace_crafter.openhands.convert_openhands_sdk_to_im`
+- Terminus2 Harbor jobs: `legoflow_trace_crafter.terminus2.convert_terminus2_to_im`
+- Claude Code session JSONL: `legoflow_trace_crafter.claudecode_opencode.convert_cc_session_to_im`
+- DataClaw conversation JSONL: `legoflow_trace_crafter.claudecode_opencode.convert_dataclaw_to_im`
 
 Each converter writes both IM and LF output. Converter-specific arguments are available through `--help`.
 
@@ -42,7 +42,7 @@ Each converter writes both IM and LF output. Converter-specific arguments are av
 For example, convert Claude Code trajectories with:
 
 ```bash
-python -m swe_data_process.claudecode_opencode.convert_cc_to_im \
+python -m legoflow_trace_crafter.claudecode_opencode.convert_cc_to_im \
   --job-dir <job-directory> \
   --im-output outputs/trajectories.im.jsonl \
   --lf-output outputs/trajectories.lf.json \
@@ -64,7 +64,7 @@ All converters apply TQS V2 rule scoring before writing output. Main-agent recor
 Run deterministic rule scoring:
 
 ```bash
-python -m swe_data_process.rule_score \
+python -m legoflow_trace_crafter.rule_score \
   --input outputs/trajectories.im.jsonl \
   --output outputs/trajectories.rule-scored.jsonl
 ```
@@ -72,11 +72,11 @@ python -m swe_data_process.rule_score \
 Optional LLM scoring uses an OpenAI-compatible API and the `llm` extra. Set `OPENAI_API_KEY` and, when required, `OPENAI_BASE_URL` in the environment.
 
 ```bash
-python -m swe_data_process.llm_score \
+python -m legoflow_trace_crafter.llm_score \
   --input outputs/trajectories.im.jsonl \
   --output outputs/trajectories.llm-scored.jsonl
 
-python -m swe_data_process.llm_checklist_score \
+python -m legoflow_trace_crafter.llm_checklist_score \
   --input outputs/trajectories.im.jsonl \
   --output outputs/trajectories.checklist-scored.jsonl
 ```

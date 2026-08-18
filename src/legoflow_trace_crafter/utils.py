@@ -821,7 +821,7 @@ def save_lf_json(
 
     # Compute the tool-call error rate from IM records before LF merges role="tool"
     # results. Import locally to avoid a utils <-> rule_score dependency cycle.
-    from swe_data_process.rule_score import (
+    from legoflow_trace_crafter.rule_score import (
         compute_tool_call_error_rate,
         print_tool_call_error_summary,
     )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from swe_data_process.utils import (
+from legoflow_trace_crafter.utils import (
     build_repo_exclusion_patterns,
     filter_by_score_bundled,
     instance_id_matches_excluded_repos,

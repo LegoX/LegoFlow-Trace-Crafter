@@ -43,7 +43,7 @@ Multilanguage correctness notes:
 
 Usage:
   conda activate swelf
-  python -m swe_data_process.rule_score --input <im.jsonl> [--output <scored.jsonl>] [--max-instances N]
+  python -m legoflow_trace_crafter.rule_score --input <im.jsonl> [--output <scored.jsonl>] [--max-instances N]
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from swe_data_process.utils import load_jsonl, save_jsonl
+from legoflow_trace_crafter.utils import load_jsonl, save_jsonl
 
 
 # ═══════════════════════════════════════════════════════════════════════════

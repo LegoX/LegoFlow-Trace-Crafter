@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from swe_data_process.terminus2.common import (
+from legoflow_trace_crafter.terminus2.common import (
     convert_one_record,
     extract_json_content_from_assistant,
     extract_observation_text,

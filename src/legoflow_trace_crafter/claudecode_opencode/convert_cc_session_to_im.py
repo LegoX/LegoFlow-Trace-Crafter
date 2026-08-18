@@ -41,7 +41,7 @@ from typing import Any, Literal
 
 from tqdm import tqdm
 
-from swe_data_process.claudecode_opencode.convert_jsonl_to_openai import (
+from legoflow_trace_crafter.claudecode_opencode.convert_jsonl_to_openai import (
     build_tool_properties_order_map,
     convert_assistant_blocks,
     infer_think_mode,
@@ -52,8 +52,8 @@ from swe_data_process.claudecode_opencode.convert_jsonl_to_openai import (
     remove_tool_use_error_turns,
     trim_trailing_tools,
 )
-from swe_data_process.rule_score import score_dataset
-from swe_data_process.utils import (
+from legoflow_trace_crafter.rule_score import score_dataset
+from legoflow_trace_crafter.utils import (
     DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     ProcessSummary,

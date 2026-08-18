@@ -5,9 +5,9 @@ from typing import Any, Literal
 
 from tqdm import tqdm
 
-from swe_data_process.openhands.common import extract_text, process_tool_call
-from swe_data_process.rule_score import score_dataset
-from swe_data_process.utils import (
+from legoflow_trace_crafter.openhands.common import extract_text, process_tool_call
+from legoflow_trace_crafter.rule_score import score_dataset
+from legoflow_trace_crafter.utils import (
     DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     check_roles,

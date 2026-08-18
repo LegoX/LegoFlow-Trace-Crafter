@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from swe_data_process.utils import (
+from legoflow_trace_crafter.utils import (
     detect_agent_type,
     get_record_think_mode,
     infer_language_code,

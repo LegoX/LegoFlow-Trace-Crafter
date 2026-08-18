@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from swe_data_process.utils import (
+from legoflow_trace_crafter.utils import (
     ModelProcessingConfig,
     get_instances_from_job_dir,
     get_resolved_instances_from_job_dir,

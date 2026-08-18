@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
-from swe_data_process.openhands.convert_openhands_sdk_to_im import convert_dataset
-from swe_data_process.terminus2.common import to_lf_record
-from swe_data_process.utils import (
+from legoflow_trace_crafter.openhands.convert_openhands_sdk_to_im import convert_dataset
+from legoflow_trace_crafter.terminus2.common import to_lf_record
+from legoflow_trace_crafter.utils import (
     convert_json_to_lf_format,
     extract_instance_id_from_config,
     load_jsonl,
@@ -134,7 +134,7 @@ def test_metadata_is_copied_to_lf_from_im():
             )
 
     with patch(
-        "swe_data_process.utils.AutoTokenizer.from_pretrained",
+        "legoflow_trace_crafter.utils.AutoTokenizer.from_pretrained",
         return_value=DummyTokenizer(),
     ):
         lf_records, _ = convert_json_to_lf_format(

@@ -4,10 +4,10 @@ from typing import Any, Literal
 
 from tqdm import tqdm
 
-from swe_data_process.claudecode_opencode.extract_and_deduplicate_jsonl import deduplicate_trajectories
-from swe_data_process.claudecode_opencode.convert_jsonl_to_openai import convert_record
-from swe_data_process.rule_score import score_dataset
-from swe_data_process.utils import (
+from legoflow_trace_crafter.claudecode_opencode.extract_and_deduplicate_jsonl import deduplicate_trajectories
+from legoflow_trace_crafter.claudecode_opencode.convert_jsonl_to_openai import convert_record
+from legoflow_trace_crafter.rule_score import score_dataset
+from legoflow_trace_crafter.utils import (
     DEFAULT_TOKENIZER_NAME,
     EXCLUDED_REPOS_FILE,
     ProcessSummary,
@@ -19,6 +19,7 @@ from swe_data_process.utils import (
     get_instances_from_job_dir,
     load_exclusion_patterns,
     load_task_metadata_from_trial,
+    replace_system_model_name,
     save_jsonl,
     save_lf_json,
     should_keep_instance,
@@ -26,7 +27,7 @@ from swe_data_process.utils import (
 )
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Convert Claude Code trajectories to IM and LF data")
+    parser = argparse.ArgumentParser(description="Convert OpenCode trajectories to IM and LF data")
     parser.add_argument("--job-dir", type=Path, required=True, help="Harbor job directory")
     parser.add_argument("--im-output", type=Path, required=True, help="Output IM JSONL file")
     parser.add_argument("--lf-output", type=Path, required=True, help="Output LF JSON file")
@@ -68,6 +69,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _is_subagent_record(record: dict) -> bool:
+    """Detect non-primary records such as OpenCode title-generator subcalls."""
+    messages = record.get("request_body", {}).get("messages", [])
+    if not messages:
+        return False
+    first = messages[0]
+    if first.get("role") == "system":
+        content = first.get("content", "")
+        if "title generator" in content.lower():
+            return True
+    return False
+
+
 def process_one_instance(
     folder_name: str,
     job_dir: Path,
@@ -76,6 +90,7 @@ def process_one_instance(
 ) -> tuple[list[dict], int, int]:
     traj_file = job_dir / folder_name / "agent" / "litellm-trajectory.jsonl"
     records = deduplicate_trajectories(traj_file)
+    records = [r for r in records if not _is_subagent_record(r)]
 
     converted_records: list[dict] = []
     role_filtered = 0
@@ -83,6 +98,7 @@ def process_one_instance(
 
     for record in records:
         converted_record = convert_record(record)
+        replace_system_model_name(converted_record["messages"])
 
         if not check_roles(converted_record["messages"]):
             role_filtered += 1
@@ -134,7 +150,7 @@ def collect_im_data(
             summary.role_filtered += role_filtered
             summary.reasoning_filtered += reasoning_filtered
 
-            if should_keep_instance(role_filtered, reasoning_filtered):
+            if converted_records and should_keep_instance(role_filtered, reasoning_filtered):
                 metadata = load_task_metadata_from_trial(job_dir, folder_name)
                 tag_instance_records(converted_records, instance_id, metadata)
                 im_data.extend(converted_records)
@@ -160,7 +176,7 @@ def main() -> None:
     if exclusion_patterns:
         instance_ids = [extract_instance_id_from_config(job_dir, f) for f in resolved_folders]
         kept_ids = set(filter_instance_ids_by_repo(
-            instance_ids, exclusion_patterns, label="cc",
+            instance_ids, exclusion_patterns, label="oc",
         ))
         resolved_folders = [
             f for f in resolved_folders
